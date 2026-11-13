@@ -15,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ggujunhi247/runner-guard/internal/alert"
 	"github.com/ggujunhi247/runner-guard/internal/config"
 	"github.com/ggujunhi247/runner-guard/internal/disk"
 	"github.com/ggujunhi247/runner-guard/internal/dockerctl"
@@ -75,6 +76,10 @@ func realMain(args []string) int {
 				return err
 			}
 			_, err = guard.Run(ctx, d, *force)
+			if err != nil && !errors.Is(err, state.ErrLocked) && d.Alert != nil {
+				host, _ := os.Hostname()
+				d.Alert(ctx, fmt.Sprintf("[runner-guard] %s: run failed: %v", host, err))
+			}
 			return err
 		})
 	case "update":
@@ -82,9 +87,7 @@ func realMain(args []string) int {
 	case "install":
 		err = doInstall(ctx)
 	case "uninstall":
-		if err = schedule.Uninstall(ctx, execx.OS{}); err == nil {
-			fmt.Println("[runner-guard] scheduled tasks removed; config and logs kept in", config.Dir())
-		}
+		err = doUninstall(ctx)
 	default:
 		fmt.Fprint(os.Stderr, usage)
 		return 2
@@ -101,12 +104,56 @@ func deps(log io.Writer) (guard.Deps, error) {
 	if err != nil {
 		return guard.Deps{}, err
 	}
-	return guard.Deps{
+	d := guard.Deps{
 		R: execx.OS{}, Cfg: cfg,
-		StatePath: filepath.Join(config.Dir(), "state.json"),
-		LockPath:  filepath.Join(config.Dir(), "lock"),
-		Now:       time.Now, Log: log, Sleep: time.Sleep,
-	}, nil
+		StatePath: statePath(), LockPath: lockPath(),
+		Now: time.Now, Log: log, Sleep: time.Sleep,
+	}
+	if cfg.AlertWebhook != "" {
+		d.Alert = func(ctx context.Context, msg string) error { return alert.Send(ctx, cfg.AlertWebhook, msg) }
+	}
+	return d, nil
+}
+
+func statePath() string { return filepath.Join(config.Dir(), "state.json") }
+func lockPath() string  { return filepath.Join(config.Dir(), "lock") }
+
+// doUninstall removes the schedule and gives back a runner we stopped;
+// nothing would ever start it again otherwise.
+func doUninstall(ctx context.Context) error {
+	cfg, _ := config.Load(config.File())
+	var errs []error
+	if st, _ := state.Load(statePath()); st.BlockedByUs {
+		if err := runnersvc.Start(ctx, execx.OS{}, cfg.RunnerService); err != nil {
+			errs = append(errs, fmt.Errorf("start %s that runner-guard stopped: %w", cfg.RunnerService, err))
+		} else {
+			st.BlockedByUs, st.BlockReason = false, ""
+			state.Save(statePath(), st)
+			fmt.Println("[runner-guard] started", cfg.RunnerService, "(it was stopped by runner-guard)")
+		}
+	}
+	if err := schedule.Uninstall(ctx, execx.OS{}); err != nil {
+		errs = append(errs, err)
+	} else {
+		fmt.Println("[runner-guard] scheduled tasks removed; config and logs kept in", config.Dir())
+	}
+	return errors.Join(errs...)
+}
+
+// waitLock waits for a run in progress instead of skipping the day's update.
+func waitLock(ctx context.Context, max time.Duration) (func(), error) {
+	deadline := time.Now().Add(max)
+	for {
+		unlock, err := state.Lock(lockPath(), guard.LockStale)
+		if !errors.Is(err, state.ErrLocked) || time.Now().After(deadline) {
+			return unlock, err
+		}
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(30 * time.Second):
+		}
+	}
 }
 
 // withLog sends log lines to stdout (journald on Linux) and the log file.
@@ -133,6 +180,7 @@ type statusReport struct {
 	RunnerExists  bool    `json:"runner_exists"`
 	RunnerRunning bool    `json:"runner_running"`
 	BlockedByUs   bool    `json:"blocked_by_us"`
+	BlockReason   string  `json:"block_reason"`
 	LastRun       string  `json:"last_run"`
 	LastAction    string  `json:"last_action"`
 }
@@ -153,7 +201,7 @@ func runStatus(ctx context.Context, d guard.Deps, asJSON bool, w io.Writer) erro
 		s.RunnerRunning, s.RunnerExists = running, exists
 	}
 	st, _ := state.Load(d.StatePath)
-	s.BlockedByUs, s.LastAction = st.BlockedByUs, st.LastAction
+	s.BlockedByUs, s.BlockReason, s.LastAction = st.BlockedByUs, st.BlockReason, st.LastAction
 	if !st.LastRun.IsZero() {
 		s.LastRun = st.LastRun.Format(time.RFC3339)
 	}
@@ -172,8 +220,12 @@ func runStatus(ctx context.Context, d guard.Deps, asJSON bool, w io.Writer) erro
 	} else if s.RunnerExists {
 		runner = "stopped"
 	}
-	fmt.Fprintf(w, "runner-guard %s\n  docker:        %s\n  disk:          %s\n  runner:        %s %s\n  blocked_by_us: %v\n  last_run:      %s\n  last_action:   %s\n",
-		s.Version, docker, s.Disk, s.RunnerService, runner, s.BlockedByUs, s.LastRun, s.LastAction)
+	blocked := "no"
+	if s.BlockedByUs {
+		blocked = "yes (" + s.BlockReason + ")"
+	}
+	fmt.Fprintf(w, "runner-guard %s\n  docker:        %s\n  disk:          %s\n  runner:        %s %s\n  blocked_by_us: %s\n  last_run:      %s\n  last_action:   %s\n",
+		s.Version, docker, s.Disk, s.RunnerService, runner, blocked, s.LastRun, s.LastAction)
 	return nil
 }
 
@@ -188,7 +240,7 @@ func doUpdate(ctx context.Context, w io.Writer, checkOnly bool) error {
 		return nil
 	}
 	// Same lock as run: never swap the binary mid-run.
-	unlock, err := state.Lock(filepath.Join(config.Dir(), "lock"), guard.LockStale)
+	unlock, err := waitLock(ctx, 30*time.Minute)
 	if err != nil {
 		return err
 	}
@@ -319,11 +371,12 @@ func selftest() error {
 	check(disk.ShouldPrune(80, 75, false), "ShouldPrune 80/75")
 	check(!disk.ShouldPrune(74.9, 75, false), "ShouldPrune 74.9/75")
 	check(disk.ShouldPrune(10, 75, true), "ShouldPrune force")
-	check(runnersvc.Decide(false, 0, 75, 90, true, false) == runnersvc.Block, "Decide docker dead -> block")
-	check(runnersvc.Decide(true, 95, 75, 90, true, false) == runnersvc.Block, "Decide disk full -> block")
-	check(runnersvc.Decide(true, 50, 75, 90, false, true) == runnersvc.Unblock, "Decide recovered -> unblock")
-	check(runnersvc.Decide(true, 80, 75, 90, false, true) == runnersvc.None, "Decide hysteresis")
-	check(runnersvc.Decide(true, 50, 75, 90, false, false) == runnersvc.None, "Decide leaves manual stop alone")
+	check(runnersvc.Decide(false, 0, 75, 90, true, false, "") == runnersvc.Block, "Decide docker dead -> block")
+	check(runnersvc.Decide(true, 95, 75, 90, true, false, "") == runnersvc.Block, "Decide disk full -> block")
+	check(runnersvc.Decide(true, 50, 75, 90, false, true, runnersvc.ReasonDisk) == runnersvc.Unblock, "Decide recovered -> unblock")
+	check(runnersvc.Decide(true, 80, 75, 90, false, true, runnersvc.ReasonDisk) == runnersvc.None, "Decide hysteresis")
+	check(runnersvc.Decide(true, 80, 75, 90, false, true, runnersvc.ReasonDocker) == runnersvc.Unblock, "Decide docker block lifts")
+	check(runnersvc.Decide(true, 50, 75, 90, false, false, "") == runnersvc.None, "Decide leaves manual stop alone")
 	up, err := update.Newer("v0.1.0", "v0.2.0")
 	check(err == nil && up, "Newer up")
 	down, err := update.Newer("v0.2.0", "v0.1.9")

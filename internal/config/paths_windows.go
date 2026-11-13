@@ -14,3 +14,10 @@ func Dir() string {
 }
 func File() string    { return filepath.Join(Dir(), "config.json") }
 func BinPath() string { return filepath.Join(Dir(), "runner-guard.exe") }
+
+// The Windows runner is a CI-only Docker Desktop host: prune images and
+// build cache, and give freed space back to the drive.
+func osDefaults(c *Config) {
+	c.PruneImages = true
+	c.DesktopReclaim = true
+}

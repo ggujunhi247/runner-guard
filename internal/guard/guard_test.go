@@ -199,3 +199,109 @@ func TestOpenLogRotates(t *testing.T) {
 		t.Fatalf("log %q", b)
 	}
 }
+
+func TestDockerBlockLiftsWhenDockerBack(t *testing.T) {
+	f := &execx.Fake{Responses: responses(true, svcStopped)}
+	d := newDeps(t, f, 80) // above prune, below block
+	state.Save(d.StatePath, state.State{BlockedByUs: true, BlockReason: runnersvc.ReasonDocker})
+	rep, err := Run(context.Background(), d, false)
+	if err != nil || rep.Action != runnersvc.Unblock || !called(f, "start") {
+		t.Fatalf("rep %+v err %v calls %v", rep, err, f.Calls)
+	}
+}
+
+func TestStopFailsAndStillRunningClearsFlag(t *testing.T) {
+	r := responses(true, svcRunning)
+	r["systemctl stop gitlab-runner"] = execx.FakeResponse{Err: errors.New("denied")}
+	r["sc.exe stop gitlab-runner"] = execx.FakeResponse{Err: errors.New("denied")}
+	f := &execx.Fake{Responses: r}
+	d := newDeps(t, f, 95)
+	if _, err := Run(context.Background(), d, false); err != nil {
+		t.Fatal(err)
+	}
+	if s, _ := state.Load(d.StatePath); s.BlockedByUs {
+		t.Fatal("flag kept although the runner is still running")
+	}
+}
+
+func TestStopTimesOutButServiceStoppedKeepsFlag(t *testing.T) {
+	r := responses(true, svcRunning)
+	r["systemctl stop gitlab-runner"] = execx.FakeResponse{Err: errors.New("timed out")}
+	r["sc.exe stop gitlab-runner"] = execx.FakeResponse{Err: errors.New("timed out")}
+	f := &execx.Fake{Responses: r}
+	d := newDeps(t, f, 95)
+	// After the failed stop, status reports the service gone quiet.
+	d.R = &switchingFake{Fake: f, after: "stop", then: responses(true, svcStopped)}
+	if _, err := Run(context.Background(), d, false); err != nil {
+		t.Fatal(err)
+	}
+	if s, _ := state.Load(d.StatePath); !s.BlockedByUs || s.BlockReason != runnersvc.ReasonDisk {
+		t.Fatalf("flag lost: %+v", s)
+	}
+}
+
+func TestReclaimAfterDiskBlockThenUnblocks(t *testing.T) {
+	f := &execx.Fake{Responses: responses(true, svcRunning)}
+	d := newDeps(t, f, 95)
+	d.Cfg.DesktopReclaim = true
+	reclaimed := false
+	d.Usage = func(context.Context) (float64, string, error) {
+		if reclaimed {
+			return 50, "after", nil
+		}
+		return 95, "before", nil
+	}
+	d.Reclaim = func(context.Context) (string, error) { reclaimed = true; return "compacted", nil }
+	var alerts []string
+	d.Alert = func(_ context.Context, msg string) error { alerts = append(alerts, msg); return nil }
+	rep, err := Run(context.Background(), d, false)
+	if err != nil || !reclaimed || rep.Action != runnersvc.Unblock {
+		t.Fatalf("rep %+v err %v", rep, err)
+	}
+	s, _ := state.Load(d.StatePath)
+	if s.BlockedByUs || !s.LastReclaim.Equal(now) {
+		t.Fatalf("state %+v", s)
+	}
+	if len(alerts) != 1 || !strings.Contains(alerts[0], "stopped") || !strings.Contains(alerts[0], "compacted") || !strings.Contains(alerts[0], "started") {
+		t.Fatalf("alerts %q", alerts)
+	}
+}
+
+func TestReclaimAtMostDaily(t *testing.T) {
+	f := &execx.Fake{Responses: responses(true, svcStopped)}
+	d := newDeps(t, f, 95)
+	d.Cfg.DesktopReclaim = true
+	state.Save(d.StatePath, state.State{BlockedByUs: true, BlockReason: runnersvc.ReasonDisk, LastReclaim: now.Add(-time.Hour)})
+	d.Reclaim = func(context.Context) (string, error) { t.Fatal("reclaimed twice in a day"); return "", nil }
+	if _, err := Run(context.Background(), d, false); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestPruneAloneDoesNotAlert(t *testing.T) {
+	f := &execx.Fake{Responses: responses(true, svcRunning)}
+	d := newDeps(t, f, 80)
+	d.Alert = func(context.Context, string) error { t.Fatal("alerted on prune"); return nil }
+	if _, err := Run(context.Background(), d, false); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// switchingFake swaps in new responses after a call containing word.
+type switchingFake struct {
+	*execx.Fake
+	after string
+	then  map[string]execx.FakeResponse
+}
+
+func (s *switchingFake) Run(ctx context.Context, to time.Duration, name string, args ...string) (string, error) {
+	out, err := s.Fake.Run(ctx, to, name, args...)
+	for _, a := range args {
+		if a == s.after {
+			for k, v := range s.then {
+				s.Fake.Responses[k] = v
+			}
+		}
+	}
+	return out, err
+}

@@ -43,7 +43,9 @@ var baseCalls = [][]string{
 
 func TestPruneDefaultSkipsImages(t *testing.T) {
 	f := &execx.Fake{}
-	if err := Prune(context.Background(), f, config.Default()); err != nil {
+	c := config.Default()
+	c.PruneImages = false // Windows defaults it on
+	if err := Prune(context.Background(), f, c); err != nil {
 		t.Fatal(err)
 	}
 	if !reflect.DeepEqual(f.Calls, baseCalls) {

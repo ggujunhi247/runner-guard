@@ -15,16 +15,19 @@ type Config struct {
 	DesktopBudgetGB          float64  `json:"desktop_budget_gb"`
 	ImageAge                 string   `json:"image_age"`
 	PruneImages              bool     `json:"prune_images"`
+	DesktopReclaim           bool     `json:"desktop_reclaim"`
+	DesktopVHDX              string   `json:"desktop_vhdx"`
 	DockerRestartMinInterval string   `json:"docker_restart_min_interval"`
 	DockerRestartMaxPerDay   int      `json:"docker_restart_max_per_day"`
 	RunnerService            string   `json:"runner_service"`
 	RefuseIfExists           []string `json:"refuse_if_exists"`
+	AlertWebhook             string   `json:"alert_webhook"`
 	UpdateRepo               string   `json:"update_repo"`
 	AutoUpdate               bool     `json:"auto_update"`
 }
 
 func Default() Config {
-	return Config{
+	c := Config{
 		PrunePercent:             75,
 		BlockPercent:             90,
 		DesktopBudgetGB:          60,
@@ -36,6 +39,8 @@ func Default() Config {
 		UpdateRepo:               "ggujunhi247/runner-guard",
 		AutoUpdate:               true,
 	}
+	osDefaults(&c)
+	return c
 }
 
 // Load reads path over the defaults. A missing file gives Default().
