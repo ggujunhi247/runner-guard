@@ -14,6 +14,8 @@ import (
 
 const timeout = 60 * time.Second
 
+var now = time.Now // tests pin the clock
+
 var tasks = []string{"runner-guard-run", "runner-guard-update", dockerctl.DesktopTask}
 
 func currentUser() string { return os.Getenv("USERDOMAIN") + `\` + os.Getenv("USERNAME") }
@@ -25,14 +27,18 @@ func currentUser() string { return os.Getenv("USERDOMAIN") + `\` + os.Getenv("US
 func Install(ctx context.Context, r execx.Runner, bin string) error {
 	dir := filepath.Dir(bin)
 	user := currentUser()
+	// First run 15 min after install (time to set refuse_if_exists); the
+	// daily update 30 min after an hourly run so they don't fight for the lock.
+	runAt := now().Add(15 * time.Minute).Format("15:04")
+	updateAt := now().Add(45 * time.Minute).Format("15:04")
 	desktop := filepath.Join(os.Getenv("ProgramFiles"), "Docker", "Docker", "Docker Desktop.exe")
 	cmds := [][]string{
 		{"icacls", dir, "/inheritance:r", "/grant:r",
 			"*S-1-5-32-544:(OI)(CI)F", "*S-1-5-18:(OI)(CI)F", "*S-1-5-32-545:(OI)(CI)RX"},
 		{"schtasks", "/Create", "/F", "/RL", "HIGHEST", "/IT", "/RU", user,
-			"/TN", "runner-guard-run", "/SC", "HOURLY", "/TR", `"` + bin + `" run`},
+			"/TN", "runner-guard-run", "/SC", "HOURLY", "/ST", runAt, "/TR", `"` + bin + `" run`},
 		{"schtasks", "/Create", "/F", "/RL", "HIGHEST", "/IT", "/RU", user,
-			"/TN", "runner-guard-update", "/SC", "DAILY", "/TR", `"` + bin + `" update`},
+			"/TN", "runner-guard-update", "/SC", "DAILY", "/ST", updateAt, "/TR", `"` + bin + `" update`},
 		// Not elevated on purpose: an elevated Docker Desktop behaves differently.
 		{"schtasks", "/Create", "/F", "/IT", "/RU", user,
 			"/TN", dockerctl.DesktopTask, "/SC", "ONCE", "/ST", "00:00", "/TR", `"` + desktop + `"`},

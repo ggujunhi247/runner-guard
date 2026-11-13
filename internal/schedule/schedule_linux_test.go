@@ -18,7 +18,7 @@ func TestInstallLinuxUnits(t *testing.T) {
 		t.Fatal(err)
 	}
 	read := func(n string) string { b, _ := os.ReadFile(filepath.Join(unitDir, n)); return string(b) }
-	for _, want := range []string{"OnBootSec=5min", "OnUnitActiveSec=1h", "Persistent=true"} {
+	for _, want := range []string{"OnActiveSec=15min", "OnUnitActiveSec=1h", "Persistent=true"} {
 		if !strings.Contains(read("runner-guard-run.timer"), want) {
 			t.Errorf("run timer lacks %s", want)
 		}

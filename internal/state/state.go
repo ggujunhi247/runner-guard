@@ -15,6 +15,8 @@ type State struct {
 	BlockedByUs    bool        `json:"blocked_by_us"`
 	LastAction     string      `json:"last_action"`
 	LastRun        time.Time   `json:"last_run"`
+	BlockReason    string      `json:"block_reason"`
+	LastReclaim    time.Time   `json:"last_reclaim"`
 }
 
 // Load never fails: a missing file is a fresh start, an empty or corrupt one

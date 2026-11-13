@@ -28,6 +28,9 @@ func (OS) Run(ctx context.Context, timeout time.Duration, name string, args ...s
 	cmd := exec.CommandContext(ctx, name, args...)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
+	// A docker CLI plugin child can keep the pipes open after docker is
+	// killed; without WaitDelay the timeout would not hold.
+	cmd.WaitDelay = 5 * time.Second
 	err := cmd.Run()
 	full := strings.TrimSpace(name + " " + strings.Join(args, " "))
 	switch {

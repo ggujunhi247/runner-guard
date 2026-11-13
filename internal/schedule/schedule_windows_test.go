@@ -6,11 +6,13 @@ import (
 	"path/filepath"
 	"reflect"
 	"testing"
+	"time"
 
 	"github.com/ggujunhi247/runner-guard/internal/execx"
 )
 
 func TestInstallWindowsCommands(t *testing.T) {
+	now = func() time.Time { return time.Date(2026, 11, 14, 9, 50, 0, 0, time.Local) }
 	f := &execx.Fake{}
 	bin := `C:\ProgramData\runner-guard\runner-guard.exe`
 	if err := Install(context.Background(), f, bin); err != nil {
@@ -22,9 +24,9 @@ func TestInstallWindowsCommands(t *testing.T) {
 		{"icacls", `C:\ProgramData\runner-guard`, "/inheritance:r", "/grant:r",
 			"*S-1-5-32-544:(OI)(CI)F", "*S-1-5-18:(OI)(CI)F", "*S-1-5-32-545:(OI)(CI)RX"},
 		{"schtasks", "/Create", "/F", "/RL", "HIGHEST", "/IT", "/RU", user,
-			"/TN", "runner-guard-run", "/SC", "HOURLY", "/TR", `"` + bin + `" run`},
+			"/TN", "runner-guard-run", "/SC", "HOURLY", "/ST", "10:05", "/TR", `"` + bin + `" run`},
 		{"schtasks", "/Create", "/F", "/RL", "HIGHEST", "/IT", "/RU", user,
-			"/TN", "runner-guard-update", "/SC", "DAILY", "/TR", `"` + bin + `" update`},
+			"/TN", "runner-guard-update", "/SC", "DAILY", "/ST", "10:35", "/TR", `"` + bin + `" update`},
 		{"schtasks", "/Create", "/F", "/IT", "/RU", user,
 			"/TN", "runner-guard-desktop", "/SC", "ONCE", "/ST", "00:00", "/TR", `"` + desktop + `"`},
 	}

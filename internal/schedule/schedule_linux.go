@@ -30,11 +30,14 @@ ExecStart=%[1]s %[2]s
 `, bin, cmd)
 }
 
+// OnActiveSec, not OnBootSec: on a host that has been up a while an elapsed
+// OnBootSec fires at once on install, before refuse_if_exists can be set.
+// The timer is also activated at boot, so this covers boots too.
 const runTimer = `[Unit]
 Description=runner-guard run every hour
 
 [Timer]
-OnBootSec=5min
+OnActiveSec=15min
 OnUnitActiveSec=1h
 Persistent=true
 

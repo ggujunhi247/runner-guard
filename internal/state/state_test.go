@@ -65,3 +65,16 @@ func TestLockReplacesStale(t *testing.T) {
 	}
 	unlock()
 }
+
+func TestUnlockLeavesForeignLock(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "lock")
+	unlock, err := Lock(p, 2*time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	os.WriteFile(p, []byte("someone else\n"), 0o644) // a successor took over
+	unlock()
+	if _, err := os.Stat(p); err != nil {
+		t.Fatal("unlock removed a lock it no longer owns")
+	}
+}
