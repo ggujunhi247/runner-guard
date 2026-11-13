@@ -5,9 +5,13 @@ on:
 permissions:
   contents: write
 jobs:
-  release:
+  build:
     runs-on: ubuntu-latest
     steps:
+      - name: reject non-release tags
+        run: |
+          # Hosts only parse vMAJOR.MINOR.PATCH; anything else as "latest" would break every update.
+          [[ "$GITHUB_REF_NAME" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "::error::tag $GITHUB_REF_NAME is not vX.Y.Z"; exit 1; }
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
@@ -24,7 +28,60 @@ jobs:
           test "$(./runner-guard_linux_amd64 version)" = "$GITHUB_REF_NAME"
           sha256sum runner-guard_* > checksums.txt
           cat checksums.txt
-      - name: publish
-        env:
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: |
+            runner-guard_*
+            checksums.txt
+
+  windows-check:
+    needs: build
+    runs-on: windows-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+      - shell: bash
+        run: |
+          ./runner-guard_windows_amd64.exe selftest
+          test "$(./runner-guard_windows_amd64.exe version | tr -d '\r')" = "$GITHUB_REF_NAME"
+
+  publish:
+    needs: [build, windows-check]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+      - env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create "$GITHUB_REF_NAME" runner-guard_* checksums.txt --generate-notes
+        run: gh release create "$GITHUB_REF_NAME" -R "$GITHUB_REPOSITORY" runner-guard_* checksums.txt --generate-notes
+
+  # The real thing: the previous release's binary updates itself to this one.
+  update-smoke:
+    needs: publish
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: previous release binary updates itself
+        run: |
+          prev=$(gh release list -R "$GITHUB_REPOSITORY" --exclude-drafts --exclude-pre-releases --limit 2 --json tagName --jq '.[1].tagName // ""')
+          if [ -z "$prev" ]; then echo "first release; nothing to update from"; exit 0; fi
+          if [ "$RUNNER_OS" = "Windows" ]; then asset=runner-guard_windows_amd64.exe; sudo=""; else asset=runner-guard_linux_amd64; sudo=sudo; fi
+          mkdir old && cd old
+          gh release download "$prev" -R "$GITHUB_REPOSITORY" -p "$asset"
+          chmod +x "$asset"
+          echo "before: $(./$asset version)"
+          $sudo ./$asset update
+          after=$(./$asset version | tr -d '\r')
+          echo "after: $after"
+          test "$after" = "$GITHUB_REF_NAME"

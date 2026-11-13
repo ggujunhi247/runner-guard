@@ -12,25 +12,39 @@ GitLab Runner(docker executor) 호스트가 흔한 고장을 스스로 고치고
    - Windows: `docker desktop restart`. 이 명령이 없는 버전이면 Docker Desktop을 끝내고, 보조 작업 `runner-guard-desktop`(관리자 권한 아님)으로 다시 띄웁니다.
 3. **디스크 점검**: 사용률이 `prune_percent`(75%) 이상이면 러너가 남긴 것을 정리합니다.
    - Linux: Docker 데이터 폴더(`DockerRootDir`)가 있는 파일시스템의 사용률입니다.
-   - Docker Desktop: `docker system df` 합계를 `desktop_budget_gb`로 나눈 값과 호스트 드라이브 사용률 중 큰 값입니다. VHDX는 줄어들지 않기 때문입니다.
+   - Docker Desktop: `docker system df` 합계를 `desktop_budget_gb`로 나눈 값과, Docker 데이터 디스크(VHDX)가 있는 드라이브의 사용률 중 큰 값입니다.
 4. **러너 차단·해제**
    - Docker가 응답하지 않거나 디스크가 `block_percent`(90%) 이상이면, 실행 중인 `gitlab-runner` 서비스를 멈춥니다. 서비스가 멈춰 있으면 잡을 받지 않으니, 실패하는 잡이 쌓이지 않습니다.
-   - 정상으로 돌아오고 디스크가 `prune_percent` 미만이 되면 다시 켭니다.
+   - 다시 켜는 기준은 멈춘 이유에 따라 다릅니다.
+     - 디스크 때문에 멈췄으면, 사용률이 `prune_percent` 미만이 될 때 켭니다. 90% 근처에서 껐다 켜기를 반복하지 않게 하기 위해서입니다.
+     - Docker 때문에 멈췄으면, Docker가 다시 응답하고 디스크가 `block_percent` 미만이면 바로 켭니다.
    - 도구가 멈춘 서비스만 도구가 다시 켭니다. 사람이 멈춘 서비스는 건드리지 않습니다.
+5. **Windows 디스크 공간 회수**: Docker Desktop의 데이터 디스크(VHDX)는 안에서 지워도 줄어들지 않습니다. 그래서 디스크 때문에 러너를 멈춘 상태(= 잡이 돌고 있지 않음)에서만, 하루 한 번까지 아래 순서로 공간을 드라이브에 돌려줍니다.
+   1. `fstrim`
+   2. Docker Desktop 종료, `wsl --shutdown`
+   3. `diskpart`로 VHDX 압축
+   4. Docker Desktop을 사용자 권한으로 다시 실행
+   5. 다시 재고, 기준 아래로 내려갔으면 러너를 바로 켭니다.
+   - 줄일 수 있는 양이 10GB 미만이면 Docker를 멈추지 않고 건너뜁니다.
+   - sparse VHDX면 `fstrim`만으로 공간이 돌아오므로 압축하지 않습니다.
 
 `runner-guard update`는 하루 한 번 GitHub Release를 확인합니다. 더 높은 버전이고 SHA256이 맞을 때만 자신을 교체합니다. 교체한 새 바이너리가 `selftest`나 `version` 확인을 통과하지 못하면 이전 파일로 되돌립니다.
 
+`alert_webhook`을 설정하면, 러너를 멈추거나 켤 때, Docker를 재시작할 때(실패 포함), 디스크를 회수할 때, `run`이 실패할 때 메시지를 보냅니다. 정리(prune)만 한 경우에는 보내지 않습니다.
+
 ## 지우는 것과 남기는 것
 
-| 대상 | 기본 | 조건 |
-| --- | --- | --- |
-| 멈춘 컨테이너 | 지움 | 라벨 `com.gitlab.gitlab-runner.managed=true`가 붙은 것만 |
-| 볼륨 | 지움 | 같은 러너 라벨이 붙었고, 어떤 컨테이너도 쓰지 않는 것만 |
-| 이미지 | **남김** | `prune_images: true`일 때만, 72시간 전에 만들어졌고 어떤 컨테이너(멈춘 것 포함)도 쓰지 않는 것 |
-| 빌드 캐시 | **남김** | `prune_images: true`일 때만, 72시간 전에 만들어진 것 |
-| 실행 중인 컨테이너, 러너가 만들지 않은 컨테이너·볼륨 | 남김 | 어떤 설정에서도 지우지 않음 |
+| 대상 | Linux 기본 | Windows 기본 | 조건 |
+| --- | --- | --- | --- |
+| 멈춘 컨테이너 | 지움 | 지움 | 라벨 `com.gitlab.gitlab-runner.managed=true`가 붙은 것만 |
+| 볼륨 | 지움 | 지움 | 같은 러너 라벨이 붙었고, 어떤 컨테이너도 쓰지 않는 것만 |
+| 이미지 | **남김** | 지움 | `prune_images: true`일 때만. 72시간 전에 만들어졌고 어떤 컨테이너(멈춘 것 포함)도 쓰지 않는 것 |
+| 빌드 캐시 | **남김** | 지움 | `prune_images: true`일 때만. 72시간 전에 만들어진 것 |
+| 실행 중인 컨테이너, 러너가 만들지 않은 컨테이너·볼륨 | 남김 | 남김 | 어떤 설정에서도 지우지 않음 |
 
-`image_age`(72h)는 이미지가 **만들어진 시각** 기준입니다. 마지막으로 쓴 시각이 아닙니다. 이미지 정리는 CI 전용 호스트에서만 켜세요. 운영 서비스가 같이 도는 호스트에서 켜면 롤백용 이미지가 지워질 수 있습니다.
+`image_age`(72h)는 이미지가 **만들어진 시각** 기준입니다. 마지막으로 쓴 시각이 아닙니다.
+
+Windows 러너는 CI 전용 호스트로 보고, 이미지 정리와 디스크 회수를 기본으로 켭니다. Linux는 운영 서비스가 같이 도는 호스트일 수 있어서 이미지를 남깁니다. 지우면 롤백용 이미지가 사라질 수 있기 때문입니다. CI 전용 Linux 호스트라면 설정에서 `prune_images: true`로 켜세요.
 
 ## 설치
 
@@ -44,9 +58,9 @@ sudo ./runner-guard_linux_amd64 install
 sudo runner-guard status
 ```
 
-`/usr/local/bin/runner-guard`에 복사하고 systemd timer 두 개를 켭니다: `runner-guard-run.timer`(매시간), `runner-guard-update.timer`(매일).
+`/usr/local/bin/runner-guard`에 복사하고 systemd timer 두 개를 켭니다: `runner-guard-run.timer`(매시간), `runner-guard-update.timer`(매일). 첫 실행은 설치 15분 뒤입니다.
 
-**Windows** (관리자 PowerShell, Docker Desktop을 쓰는 그 사용자 계정으로)
+**Windows** (관리자 PowerShell)
 
 ```powershell
 .\runner-guard_windows_amd64.exe install
@@ -54,13 +68,19 @@ sudo runner-guard status
 ```
 
 - 필수 조건: **러너 사용자가 늘 로그인해 있어야 합니다(자동 로그인 설정).** Docker Desktop은 그 사용자 세션 안에서만 동작합니다. 그래서 예약 작업도 "사용자가 로그온한 경우에만 실행"으로 등록됩니다.
+- **Docker Desktop을 쓰는 그 사용자 계정으로 관리자 PowerShell을 여세요.** 다른 관리자 계정으로 권한을 올려서 설치하면, 작업이 로그인하지 않는 그 관리자 계정에 등록되어 돌지 않습니다. 설치 뒤 `schtasks /Query /TN runner-guard-run /V /FO LIST`에서 "Run As User"를 확인하세요.
 - `install`은 `%ProgramData%\runner-guard` 폴더 권한을 바꿔서 Administrators와 SYSTEM만 쓸 수 있게 합니다. 일반 사용자가 exe를 바꿔치기해 관리자 권한을 얻는 길을 막기 위해서입니다.
-- 작업 스케줄러에 작업 세 개가 생깁니다: `runner-guard-run`(매시간), `runner-guard-update`(매일), `runner-guard-desktop`(재시작용 보조 작업, 직접 실행되지 않음).
+- 작업 스케줄러에 작업 세 개가 생깁니다.
+  - `runner-guard-run`: 매시간, 첫 실행은 설치 15분 뒤
+  - `runner-guard-update`: 매일, run보다 30분 늦게 돌아서 서로 잠금을 다투지 않음
+  - `runner-guard-desktop`: Docker Desktop을 다시 띄우는 보조 작업, 직접 실행되지 않음
+- Docker 데이터 디스크 위치는 Docker Desktop 설정(`CustomWslDistroDir`)에서 자동으로 찾습니다. 못 찾으면 `desktop_vhdx`에 경로를 적으세요.
+- 설치 직후 `status`로 디스크 사용률을 보세요. 러너가 지울 수 없는 데이터(다른 볼륨 등)만으로 `block_percent`를 넘는다면, `desktop_budget_gb`를 늘리지 않는 한 러너가 계속 멈춰 있게 됩니다.
 
 > [!WARNING]
-> **운영 서비스가 같이 도는 호스트**에서는 첫 실행 전에 `refuse_if_exists`에 그 호스트에만 있는 표식 경로를 넣으세요. 예: `["/etc/<운영-표식-파일>"]`. 그 파일이 있으면 runner-guard는 아무것도 지우거나 멈추지 않습니다.
+> **운영 서비스가 같이 도는 호스트**에서는 첫 실행(설치 15분 뒤) 전에 `refuse_if_exists`에 그 호스트에만 있는 표식 경로를 넣으세요. 예: `["/etc/<운영-표식-파일>"]`. 그 파일이 있으면 runner-guard는 아무것도 지우거나 멈추지 않습니다.
 
-제거: `runner-guard uninstall`. 예약 작업만 지우고, 설정과 로그는 남깁니다.
+제거: `runner-guard uninstall`. 예약 작업을 지우고, 도구가 멈춰 둔 러너가 있으면 다시 켭니다. 설정과 로그는 남깁니다.
 
 ## 명령
 
@@ -78,27 +98,39 @@ runner-guard selftest | version
 
 | 키 | 기본값 | 뜻 |
 | --- | --- | --- |
-| `prune_percent` | `75` | 이 사용률 이상이면 정리. 차단 해제 기준이기도 함 |
+| `prune_percent` | `75` | 이 사용률 이상이면 정리. 디스크 차단 해제 기준이기도 함 |
 | `block_percent` | `90` | 정리 뒤에도 이 사용률 이상이면 러너 차단 |
 | `desktop_budget_gb` | `60` | Docker Desktop에서 Docker 데이터에 허용할 용량 |
 | `image_age` | `"72h"` | 이미지·빌드 캐시 정리 기준(생성 시각) |
-| `prune_images` | `false` | 이미지·빌드 캐시도 정리할지 |
+| `prune_images` | Linux `false`, Windows `true` | 이미지·빌드 캐시도 정리할지 |
+| `desktop_reclaim` | Linux `false`, Windows `true` | 디스크 차단 중에 Docker Desktop VHDX 공간을 회수할지 |
+| `desktop_vhdx` | `""`(자동) | Docker Desktop 데이터 디스크 경로 |
 | `docker_restart_min_interval` | `"30m"` | Docker 재시작 최소 간격 |
 | `docker_restart_max_per_day` | `3` | 24시간 동안의 Docker 재시작 상한 |
 | `runner_service` | `"gitlab-runner"` | 멈추고 켤 서비스 이름 |
 | `refuse_if_exists` | `[]` | 이 경로 중 하나라도 있으면 `run`이 아무것도 하지 않음 |
+| `alert_webhook` | `""`(끔) | 알림을 보낼 웹훅 URL. Slack incoming webhook, Discord(URL 끝에 `/slack`) 등 |
 | `update_repo` | `"ggujunhi247/runner-guard"` | 업데이트를 받을 GitHub 저장소 |
 | `auto_update` | `true` | `false`면 `update`가 교체하지 않음(`--check`는 동작) |
+
+웹훅 URL은 비밀입니다. 호스트의 설정 파일에만 두고 저장소에 올리지 마세요.
 
 상태와 로그 위치: Linux는 `/var/lib/runner-guard/`, Windows는 `%ProgramData%\runner-guard\`입니다(`state.json`, `runner-guard.log`). 로그가 1MB를 넘으면 `runner-guard.log.1`로 한 번 회전합니다. Linux에서는 journald에도 남습니다(`journalctl -u runner-guard-run`).
 
 ## 업데이트와 릴리스
 
 ```sh
-git tag v0.2.0 && git push --tags
+git tag v0.3.0 && git push origin v0.3.0
 ```
 
-GitHub Actions가 `runner-guard_linux_amd64`, `runner-guard_windows_amd64.exe`, `checksums.txt`를 Release에 올립니다. 각 호스트는 24시간 안에 스스로 업데이트합니다. 바로 받으려면 호스트에서 `runner-guard update`를 실행하세요.
+GitHub Actions가 순서대로 처리합니다.
+
+1. 태그가 `vX.Y.Z` 형식인지 확인합니다. 다른 형식은 거부합니다.
+2. 두 OS용 바이너리를 만들고, 각 OS에서 `selftest`와 `version`을 확인합니다.
+3. `runner-guard_linux_amd64`, `runner-guard_windows_amd64.exe`, `checksums.txt`를 Release에 올립니다.
+4. **바로 이전 Release의 바이너리로 실제 `update`를 실행해서** 새 버전으로 바뀌는지 Linux·Windows 모두에서 확인합니다(`update-smoke`).
+
+각 호스트는 24시간 안에 스스로 업데이트합니다. 바로 받으려면 호스트에서 `runner-guard update`를 실행하세요.
 
 - 버전은 semver가 올라갈 때만 바뀌고, 낮아지지 않습니다.
 - GitHub가 403·429(요청 한도)로 답하거나 Release에 이 OS용 파일이 없으면, 그날 업데이트는 건너뜁니다.
@@ -117,8 +149,8 @@ Smart App Control이 켜진 PC에서는 서명하지 않은 exe를 예외로 둘
 ## 한계
 
 - `checksums.txt`는 같은 Release에서 받습니다. 전송 중 손상은 막지만, Release를 올리는 GitHub 계정이 탈취되면 막지 못합니다. 서명 검증(공개키 내장)은 v2 후보입니다.
-- 알림을 보내지 않습니다. 로그와 `status`로 확인하세요.
 - 재부팅 뒤 `gitlab-runner`가 자동으로 켜지는 것은 막지 않습니다. 호스트가 여전히 비정상이면 다음 점검에서 다시 멈춥니다.
+- Windows 디스크 회수는 Docker를 수 분에서 수십 분 멈춥니다. 그래서 러너를 이미 멈춘 상태에서만, 하루 한 번까지 합니다.
 
 ## 라이선스
 

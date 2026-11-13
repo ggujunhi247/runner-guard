@@ -19,5 +19,22 @@ jobs:
         shell: bash
         run: |
           if [ "$RUNNER_OS" = "Linux" ]; then GOOS=windows go vet ./...; else GOOS=linux go vet ./...; fi
-      - if: hashFiles('cmd/**') != ''
-        run: go build ./cmd/...
+      - run: go build ./cmd/...
+
+  # Public repo: generic leak patterns only. Private names live in a local
+  # pre-commit hook, never in this file.
+  leak-scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: no IPs, tokens, keys or real email addresses
+        run: |
+          status=0
+          pat='\b([0-9]{1,3}\.){3}[0-9]{1,3}\b|gh[pousr]_[A-Za-z0-9]{20,}|github_pat_|glpat-|xox[abpr]-|AKIA[0-9A-Z]{16}|-----BEGIN [A-Z ]*PRIVATE KEY'
+          if git ls-files -z -- ':!.github/workflows/ci.yml' | xargs -0 grep -nIE "$pat"; then echo "::error::possible IP, token or key in tracked files"; status=1; fi
+          if git ls-files -z | xargs -0 grep -nIoE '[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[a-z]{2,}' | grep -v 'noreply'; then echo "::error::email address in tracked files"; status=1; fi
+          bad=$(git log --all --format='%ae%n%ce' | sort -u | grep -v 'noreply' || true)
+          if [ -n "$bad" ]; then echo "::error::commit email is not a noreply address: $bad"; status=1; fi
+          exit $status
