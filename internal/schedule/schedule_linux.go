@@ -9,7 +9,7 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/ggujunhi/runner-guard/internal/execx"
+	"github.com/ggujunhi247/runner-guard/internal/execx"
 )
 
 var unitDir = "/etc/systemd/system"

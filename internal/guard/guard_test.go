@@ -10,10 +10,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ggujunhi/runner-guard/internal/config"
-	"github.com/ggujunhi/runner-guard/internal/execx"
-	"github.com/ggujunhi/runner-guard/internal/runnersvc"
-	"github.com/ggujunhi/runner-guard/internal/state"
+	"github.com/ggujunhi247/runner-guard/internal/config"
+	"github.com/ggujunhi247/runner-guard/internal/execx"
+	"github.com/ggujunhi247/runner-guard/internal/runnersvc"
+	"github.com/ggujunhi247/runner-guard/internal/state"
 )
 
 var now = time.Date(2026, 11, 13, 12, 0, 0, 0, time.UTC)

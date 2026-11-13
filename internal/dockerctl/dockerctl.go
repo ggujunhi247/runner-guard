@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/ggujunhi/runner-guard/internal/execx"
+	"github.com/ggujunhi247/runner-guard/internal/execx"
 )
 
 // DesktopTask is the non-admin scheduled task that relaunches Docker Desktop.

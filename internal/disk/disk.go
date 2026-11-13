@@ -10,8 +10,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/ggujunhi/runner-guard/internal/config"
-	"github.com/ggujunhi/runner-guard/internal/execx"
+	"github.com/ggujunhi247/runner-guard/internal/config"
+	"github.com/ggujunhi247/runner-guard/internal/execx"
 )
 
 // RunnerLabel matches only containers and volumes GitLab Runner created.

@@ -17,7 +17,7 @@ jobs:
         env:
           CGO_ENABLED: "0"
         run: |
-          LDFLAGS="-s -w -X github.com/ggujunhi/runner-guard/internal/update.Version=${GITHUB_REF_NAME}"
+          LDFLAGS="-s -w -X github.com/ggujunhi247/runner-guard/internal/update.Version=${GITHUB_REF_NAME}"
           GOOS=linux GOARCH=amd64 go build -trimpath -ldflags "$LDFLAGS" -o runner-guard_linux_amd64 ./cmd/runner-guard
           GOOS=windows GOARCH=amd64 go build -trimpath -ldflags "$LDFLAGS" -o runner-guard_windows_amd64.exe ./cmd/runner-guard
           ./runner-guard_linux_amd64 selftest

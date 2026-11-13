@@ -34,7 +34,7 @@ GitLab Runner(docker executor) 호스트가 흔한 고장을 스스로 고치고
 
 ## 설치
 
-[Releases](https://github.com/ggujunhi/runner-guard/releases)에서 OS에 맞는 파일을 받습니다.
+[Releases](https://github.com/ggujunhi247/runner-guard/releases)에서 OS에 맞는 파일을 받습니다.
 
 **Linux** (root 필요)
 
@@ -87,7 +87,7 @@ runner-guard selftest | version
 | `docker_restart_max_per_day` | `3` | 24시간 동안의 Docker 재시작 상한 |
 | `runner_service` | `"gitlab-runner"` | 멈추고 켤 서비스 이름 |
 | `refuse_if_exists` | `[]` | 이 경로 중 하나라도 있으면 `run`이 아무것도 하지 않음 |
-| `update_repo` | `"ggujunhi/runner-guard"` | 업데이트를 받을 GitHub 저장소 |
+| `update_repo` | `"ggujunhi247/runner-guard"` | 업데이트를 받을 GitHub 저장소 |
 | `auto_update` | `true` | `false`면 `update`가 교체하지 않음(`--check`는 동작) |
 
 상태와 로그 위치: Linux는 `/var/lib/runner-guard/`, Windows는 `%ProgramData%\runner-guard\`입니다(`state.json`, `runner-guard.log`). 로그가 1MB를 넘으면 `runner-guard.log.1`로 한 번 회전합니다. Linux에서는 journald에도 남습니다(`journalctl -u runner-guard-run`).

@@ -8,8 +8,8 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/ggujunhi/runner-guard/internal/dockerctl"
-	"github.com/ggujunhi/runner-guard/internal/execx"
+	"github.com/ggujunhi247/runner-guard/internal/dockerctl"
+	"github.com/ggujunhi247/runner-guard/internal/execx"
 )
 
 const timeout = 60 * time.Second

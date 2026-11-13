@@ -1,3 +1,3 @@
-module github.com/ggujunhi/runner-guard
+module github.com/ggujunhi247/runner-guard
 
 go 1.23

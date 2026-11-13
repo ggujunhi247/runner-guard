@@ -8,9 +8,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ggujunhi/runner-guard/internal/config"
-	"github.com/ggujunhi/runner-guard/internal/execx"
-	"github.com/ggujunhi/runner-guard/internal/guard"
+	"github.com/ggujunhi247/runner-guard/internal/config"
+	"github.com/ggujunhi247/runner-guard/internal/execx"
+	"github.com/ggujunhi247/runner-guard/internal/guard"
 )
 
 func TestStatusJSON(t *testing.T) {

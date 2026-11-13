@@ -5,7 +5,7 @@ import (
 	"errors"
 	"strings"
 
-	"github.com/ggujunhi/runner-guard/internal/execx"
+	"github.com/ggujunhi247/runner-guard/internal/execx"
 )
 
 func Status(ctx context.Context, r execx.Runner, name string) (running bool, exists bool, err error) {

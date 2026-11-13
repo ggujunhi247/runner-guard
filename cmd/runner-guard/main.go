@@ -15,15 +15,15 @@ import (
 	"strings"
 	"time"
 
-	"github.com/ggujunhi/runner-guard/internal/config"
-	"github.com/ggujunhi/runner-guard/internal/disk"
-	"github.com/ggujunhi/runner-guard/internal/dockerctl"
-	"github.com/ggujunhi/runner-guard/internal/execx"
-	"github.com/ggujunhi/runner-guard/internal/guard"
-	"github.com/ggujunhi/runner-guard/internal/runnersvc"
-	"github.com/ggujunhi/runner-guard/internal/schedule"
-	"github.com/ggujunhi/runner-guard/internal/state"
-	"github.com/ggujunhi/runner-guard/internal/update"
+	"github.com/ggujunhi247/runner-guard/internal/config"
+	"github.com/ggujunhi247/runner-guard/internal/disk"
+	"github.com/ggujunhi247/runner-guard/internal/dockerctl"
+	"github.com/ggujunhi247/runner-guard/internal/execx"
+	"github.com/ggujunhi247/runner-guard/internal/guard"
+	"github.com/ggujunhi247/runner-guard/internal/runnersvc"
+	"github.com/ggujunhi247/runner-guard/internal/schedule"
+	"github.com/ggujunhi247/runner-guard/internal/state"
+	"github.com/ggujunhi247/runner-guard/internal/update"
 )
 
 const usage = `usage: runner-guard <command>

@@ -6,8 +6,8 @@ import (
 	"strings"
 	"syscall"
 
-	"github.com/ggujunhi/runner-guard/internal/config"
-	"github.com/ggujunhi/runner-guard/internal/execx"
+	"github.com/ggujunhi247/runner-guard/internal/config"
+	"github.com/ggujunhi247/runner-guard/internal/execx"
 )
 
 // Usage is the used percent of the filesystem holding DockerRootDir.

@@ -33,7 +33,7 @@ func Default() Config {
 		DockerRestartMaxPerDay:   3,
 		RunnerService:            "gitlab-runner",
 		RefuseIfExists:           []string{},
-		UpdateRepo:               "ggujunhi/runner-guard",
+		UpdateRepo:               "ggujunhi247/runner-guard",
 		AutoUpdate:               true,
 	}
 }

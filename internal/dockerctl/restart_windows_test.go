@@ -6,7 +6,7 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/ggujunhi/runner-guard/internal/execx"
+	"github.com/ggujunhi247/runner-guard/internal/execx"
 )
 
 func TestRestartWindowsPrefersDesktopCLI(t *testing.T) {
