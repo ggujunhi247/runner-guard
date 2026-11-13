@@ -1,0 +1,5 @@
+dist/
+/runner-guard
+/runner-guard.exe
+# Planning notes mention private names; keep them out of the public repo.
+docs/superpowers/
