@@ -1,0 +1,30 @@
+name: release
+on:
+  push:
+    tags: ["v*"]
+permissions:
+  contents: write
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.23"
+      - run: go vet ./... && go test ./...
+      - name: build
+        env:
+          CGO_ENABLED: "0"
+        run: |
+          LDFLAGS="-s -w -X github.com/ggujunhi/runner-guard/internal/update.Version=${GITHUB_REF_NAME}"
+          GOOS=linux GOARCH=amd64 go build -trimpath -ldflags "$LDFLAGS" -o runner-guard_linux_amd64 ./cmd/runner-guard
+          GOOS=windows GOARCH=amd64 go build -trimpath -ldflags "$LDFLAGS" -o runner-guard_windows_amd64.exe ./cmd/runner-guard
+          ./runner-guard_linux_amd64 selftest
+          test "$(./runner-guard_linux_amd64 version)" = "$GITHUB_REF_NAME"
+          sha256sum runner-guard_* > checksums.txt
+          cat checksums.txt
+      - name: publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" runner-guard_* checksums.txt --generate-notes
