@@ -15,7 +15,9 @@ var procGetDiskFreeSpaceExW = syscall.NewLazyDLL("kernel32.dll").NewProc("GetDis
 
 // Usage is the larger of Docker data vs desktop_budget_gb and the host drive's used percent.
 func Usage(ctx context.Context, r execx.Runner, cfg config.Config) (float64, string, error) {
-	out, err := r.Run(ctx, cmdTimeout, "docker", "system", "df", "--format", "{{json .}}")
+	// df walks every volume; it took ~4 min on a real Desktop host, so it
+	// gets the prune timeout rather than 60s.
+	out, err := r.Run(ctx, pruneTimeout, "docker", "system", "df", "--format", "{{json .}}")
 	if err != nil {
 		return 0, "", err
 	}
