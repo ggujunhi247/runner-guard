@@ -46,9 +46,9 @@ func Reclaim(ctx context.Context, r execx.Runner, cfg config.Config, relaunch fu
 		r.Run(ctx, cmdTimeout, "taskkill", "/F", "/IM", "Docker Desktop.exe")
 	}
 	r.Run(ctx, cmdTimeout, "wsl", "--shutdown")
-	compactErr := diskpart(ctx, r, fmt.Sprintf("select vdisk file=%q\nattach vdisk readonly\ncompact vdisk\ndetach vdisk\n", vhdx))
+	compactErr := diskpart(ctx, r, compactScript(vhdx))
 	if compactErr != nil {
-		diskpart(ctx, r, fmt.Sprintf("select vdisk file=%q\ndetach vdisk\n", vhdx)) // never leave it attached
+		diskpart(ctx, r, selectVDisk(vhdx)+"detach vdisk\n") // never leave it attached
 	}
 	if err := relaunch(); err != nil {
 		return "", fmt.Errorf("relaunch Docker Desktop after compact: %w", err)
@@ -87,4 +87,12 @@ func isSparse(path string) bool {
 	}
 	attrs, err := syscall.GetFileAttributes(p)
 	return err == nil && attrs&0x200 != 0 // FILE_ATTRIBUTE_SPARSE_FILE
+}
+
+// selectVDisk quotes the path for diskpart. Not %q: Go escaping doubles
+// every backslash, which diskpart takes literally.
+func selectVDisk(vhdx string) string { return `select vdisk file="` + vhdx + "\"\n" }
+
+func compactScript(vhdx string) string {
+	return selectVDisk(vhdx) + "attach vdisk readonly\ncompact vdisk\ndetach vdisk\n"
 }

@@ -45,3 +45,11 @@ func TestReclaimSkipsSmallGain(t *testing.T) {
 		}
 	}
 }
+
+func TestCompactScriptKeepsPathVerbatim(t *testing.T) {
+	got := compactScript(`D:\Docker data\disk\docker_data.vhdx`)
+	want := `select vdisk file="D:\Docker data\disk\docker_data.vhdx"` + "\nattach vdisk readonly\ncompact vdisk\ndetach vdisk\n"
+	if got != want {
+		t.Fatalf("got %q", got)
+	}
+}
