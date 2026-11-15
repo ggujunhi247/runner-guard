@@ -29,7 +29,7 @@ func TestStatusJSON(t *testing.T) {
 	if err := json.Unmarshal(out.Bytes(), &m); err != nil {
 		t.Fatalf("%v: %s", err, out.String())
 	}
-	for _, k := range []string{"version", "docker_healthy", "disk_percent", "runner_running", "blocked_by_us", "last_action"} {
+	for _, k := range []string{"version", "docker_healthy", "disk_percent", "runner_running", "blocked_by_us", "last_action", "docker_latency_ms", "memory_percent", "load_per_cpu"} {
 		if _, ok := m[k]; !ok {
 			t.Errorf("missing key %s in %s", k, out.String())
 		}

@@ -30,7 +30,21 @@ GitLab Runner(docker executor) 호스트가 흔한 고장을 스스로 고치고
 
 `runner-guard update`는 하루 한 번 GitHub Release를 확인합니다. 더 높은 버전이고 SHA256이 맞을 때만 자신을 교체합니다. 교체한 새 바이너리가 `selftest`나 `version` 확인을 통과하지 못하면 이전 파일로 되돌립니다.
 
-`alert_webhook`을 설정하면, 러너를 멈추거나 켤 때, Docker를 재시작할 때(실패 포함), 디스크를 회수할 때, `run`이 실패할 때 메시지를 보냅니다. 정리(prune)만 한 경우에는 보내지 않습니다.
+### 병목: 손대는 것과 알리기만 하는 것
+
+runner-guard는 두 조건을 모두 만족할 때만 직접 조치합니다. 러너가 남긴 것이 확실해야 하고, 정상적으로 도는 잡을 해칠 수 없어야 합니다. 어느 하나라도 아니면 측정하고 알리기만 합니다.
+
+| 병목 | 동작 |
+| --- | --- |
+| 러너 라벨이 붙은 컨테이너가 `stuck_container_age`보다 오래 실행 중 | **강제 삭제**. 기본은 꺼짐이고, 가장 긴 GitLab 잡 시간 제한보다 넉넉한 값(최소 1h, 예: `"6h"`)을 넣으면 켜집니다. 그 시간을 넘긴 잡은 GitLab에서 이미 끝난 잡이라, 컨테이너는 CPU·메모리·디스크만 차지합니다 |
+| `docker info` 응답이 20초 이상 | 기록, 3번 연속이면 알림 |
+| 메모리 사용률 90% 이상 | 기록, 3번 연속이면 알림 |
+| 부하가 CPU당 2.0 이상 (Linux만) | 기록, 3번 연속이면 알림 |
+| 동시 잡 수, WSL 메모리 상한, 느린 잡 | 손대지 않음. 무거운 잡과 아픈 호스트를 도구가 구분할 수 없고, 잘못 판단하면 모든 잡에 영향이 갑니다 |
+
+`run`은 한 시간마다 돌기 때문에, "3번 연속"은 약 3시간 동안 계속됐다는 뜻입니다. 알림은 그 시점에 한 번만 보내고, 값이 정상으로 돌아오면 횟수를 0부터 다시 셉니다.
+
+`alert_webhook`을 설정하면, 러너를 멈추거나 켤 때, Docker를 재시작할 때(실패 포함), 디스크를 회수할 때, 오래 멈춘 컨테이너를 지울 때, 부하가 계속될 때, `run`이 실패할 때 메시지를 보냅니다. 정리(prune)만 한 경우에는 보내지 않습니다.
 
 ## 지우는 것과 남기는 것
 
@@ -109,6 +123,7 @@ runner-guard selftest | version
 | `docker_restart_max_per_day` | `3` | 24시간 동안의 Docker 재시작 상한 |
 | `runner_service` | `"gitlab-runner"` | 멈추고 켤 서비스 이름 |
 | `refuse_if_exists` | `[]` | 이 경로 중 하나라도 있으면 `run`이 아무것도 하지 않음 |
+| `stuck_container_age` | `""`(끔) | 이보다 오래 실행 중인 러너 컨테이너를 삭제. 최소 `"1h"`, 가장 긴 잡 시간 제한보다 크게 |
 | `alert_webhook` | `""`(끔) | 알림을 보낼 웹훅 URL. Slack incoming webhook, Discord(URL 끝에 `/slack`) 등 |
 | `update_repo` | `"ggujunhi247/runner-guard"` | 업데이트를 받을 GitHub 저장소 |
 | `auto_update` | `true` | `false`면 `update`가 교체하지 않음(`--check`는 동작) |

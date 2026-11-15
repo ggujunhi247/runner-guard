@@ -183,11 +183,20 @@ type statusReport struct {
 	BlockReason   string  `json:"block_reason"`
 	LastRun       string  `json:"last_run"`
 	LastAction    string  `json:"last_action"`
+	DockerMillis  int64   `json:"docker_latency_ms"`
+	MemoryPercent float64 `json:"memory_percent"`
+	LoadPerCPU    float64 `json:"load_per_cpu"` // -1 on Windows
+	PressureRuns  int     `json:"pressure_runs"`
 }
 
 func runStatus(ctx context.Context, d guard.Deps, asJSON bool, w io.Writer) error {
 	s := statusReport{Version: update.Version, RunnerService: d.Cfg.RunnerService}
+	start := time.Now()
 	s.DockerHealthy = dockerctl.Healthy(ctx, d.R)
+	s.DockerMillis = time.Since(start).Milliseconds()
+	if p, err := d.MeasurePressure(); err == nil {
+		s.MemoryPercent, s.LoadPerCPU = p.MemPct, p.LoadPerCPU
+	}
 	s.Disk = "unknown (docker not responding)"
 	if s.DockerHealthy {
 		pct, desc, err := d.MeasureUsage(ctx)
@@ -201,7 +210,7 @@ func runStatus(ctx context.Context, d guard.Deps, asJSON bool, w io.Writer) erro
 		s.RunnerRunning, s.RunnerExists = running, exists
 	}
 	st, _ := state.Load(d.StatePath)
-	s.BlockedByUs, s.BlockReason, s.LastAction = st.BlockedByUs, st.BlockReason, st.LastAction
+	s.BlockedByUs, s.BlockReason, s.LastAction, s.PressureRuns = st.BlockedByUs, st.BlockReason, st.LastAction, st.PressureRuns
 	if !st.LastRun.IsZero() {
 		s.LastRun = st.LastRun.Format(time.RFC3339)
 	}
@@ -224,8 +233,12 @@ func runStatus(ctx context.Context, d guard.Deps, asJSON bool, w io.Writer) erro
 	if s.BlockedByUs {
 		blocked = "yes (" + s.BlockReason + ")"
 	}
-	fmt.Fprintf(w, "runner-guard %s\n  docker:        %s\n  disk:          %s\n  runner:        %s %s\n  blocked_by_us: %s\n  last_run:      %s\n  last_action:   %s\n",
-		s.Version, docker, s.Disk, s.RunnerService, runner, blocked, s.LastRun, s.LastAction)
+	load := "n/a"
+	if s.LoadPerCPU >= 0 {
+		load = fmt.Sprintf("%.2f per CPU", s.LoadPerCPU)
+	}
+	fmt.Fprintf(w, "runner-guard %s\n  docker:        %s (%dms)\n  disk:          %s\n  memory:        %.0f%%, load %s (over threshold %d run(s) in a row)\n  runner:        %s %s\n  blocked_by_us: %s\n  last_run:      %s\n  last_action:   %s\n",
+		s.Version, docker, s.DockerMillis, s.Disk, s.MemoryPercent, load, s.PressureRuns, s.RunnerService, runner, blocked, s.LastRun, s.LastAction)
 	return nil
 }
 

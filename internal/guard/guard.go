@@ -14,6 +14,7 @@ import (
 	"github.com/ggujunhi247/runner-guard/internal/disk"
 	"github.com/ggujunhi247/runner-guard/internal/dockerctl"
 	"github.com/ggujunhi247/runner-guard/internal/execx"
+	"github.com/ggujunhi247/runner-guard/internal/pressure"
 	"github.com/ggujunhi247/runner-guard/internal/runnersvc"
 	"github.com/ggujunhi247/runner-guard/internal/state"
 )
@@ -45,6 +46,16 @@ type Deps struct {
 	Sleep func(time.Duration)
 	// Alert receives one message per run in which something changed. Nil: no alerts.
 	Alert func(ctx context.Context, msg string) error
+	// Pressure overrides pressure.Read (tests). Nil uses pressure.Read.
+	Pressure func() (pressure.Sample, error)
+}
+
+// MeasurePressure samples host memory and load.
+func (d Deps) MeasurePressure() (pressure.Sample, error) {
+	if d.Pressure != nil {
+		return d.Pressure()
+	}
+	return pressure.Read()
 }
 
 type Report struct {
@@ -55,6 +66,9 @@ type Report struct {
 	Reclaimed     string
 	Action        runnersvc.Action
 	Warnings      []string
+	DockerLatency time.Duration
+	Pressure      pressure.Sample
+	Stuck         []string // runner containers removed for running past stuck_container_age
 }
 
 // MeasureUsage returns the disk used percent for this host.
@@ -133,7 +147,9 @@ func Run(ctx context.Context, d Deps, force bool) (Report, error) {
 	}
 
 	// Docker first: without an engine, pruning is pointless.
+	start := time.Now()
 	err = dockerctl.Check(ctx, d.R)
+	rep.DockerLatency = time.Since(start)
 	if errors.Is(err, execx.ErrNotFound) {
 		// A misconfigured guard must not take the runner down.
 		return rep, d.stillBlocked(fmt.Errorf("docker CLI not found in PATH; nothing changed: %w", err))
@@ -167,6 +183,18 @@ func Run(ctx context.Context, d Deps, force bool) (Report, error) {
 		measured, rep.Pct = true, pct
 		logf("disk%s %s", label, desc)
 	}
+	stuckAge, _ := d.Cfg.StuckAge() // validated by Durations above
+	if rep.DockerHealthy && stuckAge > 0 {
+		removed, err := disk.RemoveStuck(ctx, d.R, now, stuckAge)
+		if err != nil {
+			warn("stuck containers: %v", err)
+		}
+		if len(removed) > 0 {
+			rep.Stuck = removed
+			did = append(did, fmt.Sprintf("removed %d runner container(s) running longer than %s", len(removed), stuckAge))
+		}
+	}
+
 	if rep.DockerHealthy {
 		measure("")
 		if measured && disk.ShouldPrune(rep.Pct, d.Cfg.PrunePercent, force) {
@@ -252,6 +280,28 @@ func Run(ctx context.Context, d Deps, force bool) (Report, error) {
 		}
 	}
 
+	// Pressure is reported, never acted on: the guard cannot tell a heavy job
+	// from a sick host. Page once when it lasts SustainedRuns runs in a row.
+	latency := rep.DockerLatency
+	if !rep.DockerHealthy {
+		latency = 0 // a dead engine is handled above, not a slowness signal
+	}
+	if s, err := d.MeasurePressure(); err != nil {
+		logf("pressure: %v", err)
+	} else {
+		rep.Pressure = s
+		reasons := pressure.Reasons(s, latency)
+		if len(reasons) == 0 {
+			st.PressureRuns = 0
+		} else {
+			st.PressureRuns++
+			logf("pressure (%d run(s) in a row): %s", st.PressureRuns, strings.Join(reasons, ", "))
+			if st.PressureRuns == pressure.SustainedRuns {
+				did = append(did, fmt.Sprintf("host under pressure for %d runs: %s", st.PressureRuns, strings.Join(reasons, ", ")))
+			}
+		}
+	}
+
 	st.DockerRestarts = dockerctl.Trim(now, st.DockerRestarts)
 	st.LastRun = now
 	if len(did) > 0 {
@@ -260,8 +310,9 @@ func Run(ctx context.Context, d Deps, force bool) (Report, error) {
 	if err := state.Save(d.StatePath, st); err != nil {
 		warn("save state: %v", err)
 	}
-	logf("run done: docker_healthy=%v restarted=%v disk=%.1f%% pruned=%v action=%s warnings=%d",
-		rep.DockerHealthy, rep.Restarted, rep.Pct, rep.Pruned, rep.Action, len(rep.Warnings))
+	logf("run done: docker_healthy=%v docker_latency=%s restarted=%v disk=%.1f%% pruned=%v stuck_removed=%d mem=%.0f%% load_per_cpu=%.2f action=%s warnings=%d",
+		rep.DockerHealthy, rep.DockerLatency.Round(time.Millisecond), rep.Restarted, rep.Pct, rep.Pruned, len(rep.Stuck),
+		rep.Pressure.MemPct, rep.Pressure.LoadPerCPU, rep.Action, len(rep.Warnings))
 	var notable []string // pruning repeats hourly at high usage; not worth a ping
 	for _, s := range did {
 		if !strings.HasPrefix(s, "pruned") {

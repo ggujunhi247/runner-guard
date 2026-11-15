@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"testing"
+	"time"
 )
 
 func TestLoadMissingReturnsDefault(t *testing.T) {
@@ -28,5 +29,20 @@ func TestDurationsRejectsGarbage(t *testing.T) {
 	c.DockerRestartMinInterval = "soon"
 	if _, _, err := c.Durations(); err == nil {
 		t.Fatal("want error")
+	}
+}
+
+func TestStuckAge(t *testing.T) {
+	c := Default()
+	if d, err := c.StuckAge(); d != 0 || err != nil {
+		t.Fatalf("default should be off: %v %v", d, err)
+	}
+	c.StuckContainerAge = "30m"
+	if _, _, err := c.Durations(); err == nil {
+		t.Fatal("30m must be rejected")
+	}
+	c.StuckContainerAge = "6h"
+	if d, err := c.StuckAge(); d != 6*time.Hour || err != nil {
+		t.Fatalf("got %v %v", d, err)
 	}
 }

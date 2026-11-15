@@ -17,6 +17,7 @@ type State struct {
 	LastRun        time.Time   `json:"last_run"`
 	BlockReason    string      `json:"block_reason"`
 	LastReclaim    time.Time   `json:"last_reclaim"`
+	PressureRuns   int         `json:"pressure_runs"` // consecutive runs over a pressure threshold
 }
 
 // Load never fails: a missing file is a fresh start, an empty or corrupt one

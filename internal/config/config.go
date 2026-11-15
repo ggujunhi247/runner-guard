@@ -21,6 +21,7 @@ type Config struct {
 	DockerRestartMaxPerDay   int      `json:"docker_restart_max_per_day"`
 	RunnerService            string   `json:"runner_service"`
 	RefuseIfExists           []string `json:"refuse_if_exists"`
+	StuckContainerAge        string   `json:"stuck_container_age"`
 	AlertWebhook             string   `json:"alert_webhook"`
 	UpdateRepo               string   `json:"update_repo"`
 	AutoUpdate               bool     `json:"auto_update"`
@@ -68,5 +69,24 @@ func (c Config) Durations() (imageAge string, restartMin time.Duration, err erro
 	if err != nil {
 		return "", 0, fmt.Errorf("docker_restart_min_interval: %w", err)
 	}
+	if _, err := c.StuckAge(); err != nil {
+		return "", 0, err
+	}
 	return c.ImageAge, restartMin, nil
+}
+
+// StuckAge parses stuck_container_age; 0 means off. Values under an hour
+// are rejected: set it well above the longest GitLab job timeout.
+func (c Config) StuckAge() (time.Duration, error) {
+	if c.StuckContainerAge == "" {
+		return 0, nil
+	}
+	d, err := time.ParseDuration(c.StuckContainerAge)
+	if err != nil {
+		return 0, fmt.Errorf("stuck_container_age: %w", err)
+	}
+	if d < time.Hour {
+		return 0, fmt.Errorf("stuck_container_age %s is under 1h; it must exceed the longest job timeout", d)
+	}
+	return d, nil
 }

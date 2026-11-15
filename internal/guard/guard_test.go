@@ -12,6 +12,7 @@ import (
 
 	"github.com/ggujunhi247/runner-guard/internal/config"
 	"github.com/ggujunhi247/runner-guard/internal/execx"
+	"github.com/ggujunhi247/runner-guard/internal/pressure"
 	"github.com/ggujunhi247/runner-guard/internal/runnersvc"
 	"github.com/ggujunhi247/runner-guard/internal/state"
 )
@@ -55,8 +56,9 @@ func newDeps(t *testing.T, f *execx.Fake, pct float64) Deps {
 		R: f, Cfg: config.Default(),
 		StatePath: filepath.Join(dir, "state.json"), LockPath: filepath.Join(dir, "lock"),
 		Now: func() time.Time { return now }, Log: &bytes.Buffer{},
-		Exists: func(string) bool { return false },
-		Usage:  func(context.Context) (float64, string, error) { return pct, "test", nil },
+		Exists:   func(string) bool { return false },
+		Usage:    func(context.Context) (float64, string, error) { return pct, "test", nil },
+		Pressure: func() (pressure.Sample, error) { return pressure.Sample{MemPct: 50, LoadPerCPU: -1}, nil },
 	}
 }
 
@@ -304,4 +306,52 @@ func (s *switchingFake) Run(ctx context.Context, to time.Duration, name string, 
 		}
 	}
 	return out, err
+}
+
+func TestStuckContainersRemovedWhenEnabled(t *testing.T) {
+	r := responses(true, svcRunning)
+	r["docker ps -q --no-trunc --filter label=com.gitlab.gitlab-runner.managed=true --filter status=running"] = execx.FakeResponse{Out: "dead\n"}
+	r["docker inspect --format {{.Id}} {{.State.StartedAt}} dead"] = execx.FakeResponse{Out: "dead 2026-11-13T01:00:00Z\n"}
+	f := &execx.Fake{Responses: r}
+	d := newDeps(t, f, 50)
+	if _, err := Run(context.Background(), d, false); err != nil {
+		t.Fatal(err)
+	}
+	if called(f, "rm") {
+		t.Fatal("removed containers although stuck_container_age is off")
+	}
+	d.Cfg.StuckContainerAge = "6h"
+	var alerts []string
+	d.Alert = func(_ context.Context, m string) error { alerts = append(alerts, m); return nil }
+	rep, err := Run(context.Background(), d, false)
+	if err != nil || len(rep.Stuck) != 1 || !called(f, "rm") {
+		t.Fatalf("rep %+v err %v", rep, err)
+	}
+	if len(alerts) != 1 || !strings.Contains(alerts[0], "running longer than 6h") {
+		t.Fatalf("alerts %q", alerts)
+	}
+}
+
+func TestPressureAlertsOnceWhenSustained(t *testing.T) {
+	f := &execx.Fake{Responses: responses(true, svcRunning)}
+	d := newDeps(t, f, 50)
+	d.Pressure = func() (pressure.Sample, error) { return pressure.Sample{MemPct: 97, LoadPerCPU: -1}, nil }
+	var alerts []string
+	d.Alert = func(_ context.Context, m string) error { alerts = append(alerts, m); return nil }
+	for i := 0; i < 5; i++ {
+		if _, err := Run(context.Background(), d, false); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if len(alerts) != 1 || !strings.Contains(alerts[0], "memory 97%") {
+		t.Fatalf("want exactly one alert on run 3, got %q", alerts)
+	}
+	if called(f, "stop") {
+		t.Fatal("pressure must never stop the runner")
+	}
+	d.Pressure = func() (pressure.Sample, error) { return pressure.Sample{MemPct: 40, LoadPerCPU: -1}, nil }
+	Run(context.Background(), d, false)
+	if s, _ := state.Load(d.StatePath); s.PressureRuns != 0 {
+		t.Fatalf("streak not reset: %d", s.PressureRuns)
+	}
 }
