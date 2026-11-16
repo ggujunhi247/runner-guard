@@ -34,8 +34,12 @@ func TestDurationsRejectsGarbage(t *testing.T) {
 
 func TestStuckAge(t *testing.T) {
 	c := Default()
+	if d, err := c.StuckAge(); d != 6*time.Hour || err != nil {
+		t.Fatalf("default should be 6h: %v %v", d, err)
+	}
+	c.StuckContainerAge = ""
 	if d, err := c.StuckAge(); d != 0 || err != nil {
-		t.Fatalf("default should be off: %v %v", d, err)
+		t.Fatalf("empty must turn it off: %v %v", d, err)
 	}
 	c.StuckContainerAge = "30m"
 	if _, _, err := c.Durations(); err == nil {

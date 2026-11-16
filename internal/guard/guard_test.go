@@ -314,13 +314,14 @@ func TestStuckContainersRemovedWhenEnabled(t *testing.T) {
 	r["docker inspect --format {{.Id}} {{.State.StartedAt}} dead"] = execx.FakeResponse{Out: "dead 2026-11-13T01:00:00Z\n"}
 	f := &execx.Fake{Responses: r}
 	d := newDeps(t, f, 50)
+	d.Cfg.StuckContainerAge = "" // explicitly off
 	if _, err := Run(context.Background(), d, false); err != nil {
 		t.Fatal(err)
 	}
 	if called(f, "rm") {
 		t.Fatal("removed containers although stuck_container_age is off")
 	}
-	d.Cfg.StuckContainerAge = "6h"
+	d.Cfg = config.Default() // on by default (6h)
 	var alerts []string
 	d.Alert = func(_ context.Context, m string) error { alerts = append(alerts, m); return nil }
 	rep, err := Run(context.Background(), d, false)

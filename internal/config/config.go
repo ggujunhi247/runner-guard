@@ -37,8 +37,10 @@ func Default() Config {
 		DockerRestartMaxPerDay:   3,
 		RunnerService:            "gitlab-runner",
 		RefuseIfExists:           []string{},
-		UpdateRepo:               "ggujunhi247/runner-guard",
-		AutoUpdate:               true,
+		// Well above GitLab's default 1h job timeout; raise it if jobs may run longer.
+		StuckContainerAge: "6h",
+		UpdateRepo:        "ggujunhi247/runner-guard",
+		AutoUpdate:        true,
 	}
 	osDefaults(&c)
 	return c

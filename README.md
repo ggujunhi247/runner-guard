@@ -36,7 +36,7 @@ runner-guard는 두 조건을 모두 만족할 때만 직접 조치합니다. �
 
 | 병목 | 동작 |
 | --- | --- |
-| 러너 라벨이 붙은 컨테이너가 `stuck_container_age`보다 오래 실행 중 | **강제 삭제**. 기본은 꺼짐이고, 가장 긴 GitLab 잡 시간 제한보다 넉넉한 값(최소 1h, 예: `"6h"`)을 넣으면 켜집니다. 그 시간을 넘긴 잡은 GitLab에서 이미 끝난 잡이라, 컨테이너는 CPU·메모리·디스크만 차지합니다 |
+| 러너 라벨이 붙은 컨테이너가 `stuck_container_age`보다 오래 실행 중 | **강제 삭제**. 기본으로 켜져 있고 기준은 `"6h"`입니다. GitLab 기본 잡 시간 제한(1시간)보다 넉넉한 값입니다. 6시간보다 오래 도는 잡이 있으면 그보다 큰 값으로 올리고(최소 `"1h"`), `""`로 두면 꺼집니다. 그 시간을 넘긴 잡은 GitLab에서 이미 끝난 잡이라, 컨테이너는 CPU·메모리·디스크만 차지합니다 |
 | `docker info` 응답이 20초 이상 | 기록, 3번 연속이면 알림 |
 | 메모리 사용률 90% 이상 | 기록, 3번 연속이면 알림 |
 | 부하가 CPU당 2.0 이상 (Linux만) | 기록, 3번 연속이면 알림 |
@@ -123,7 +123,7 @@ runner-guard selftest | version
 | `docker_restart_max_per_day` | `3` | 24시간 동안의 Docker 재시작 상한 |
 | `runner_service` | `"gitlab-runner"` | 멈추고 켤 서비스 이름 |
 | `refuse_if_exists` | `[]` | 이 경로 중 하나라도 있으면 `run`이 아무것도 하지 않음 |
-| `stuck_container_age` | `""`(끔) | 이보다 오래 실행 중인 러너 컨테이너를 삭제. 최소 `"1h"`, 가장 긴 잡 시간 제한보다 크게 |
+| `stuck_container_age` | `"6h"` | 이보다 오래 실행 중인 러너 컨테이너를 삭제. 최소 `"1h"`, 가장 긴 잡 시간 제한보다 크게. `""`면 끔 |
 | `alert_webhook` | `""`(끔) | 알림을 보낼 웹훅 URL. Slack incoming webhook, Discord(URL 끝에 `/slack`) 등 |
 | `update_repo` | `"ggujunhi247/runner-guard"` | 업데이트를 받을 GitHub 저장소 |
 | `auto_update` | `true` | `false`면 `update`가 교체하지 않음(`--check`는 동작) |
