@@ -23,5 +23,26 @@ lock
 *.pfx
 *.p12
 
+*.jks
+*.keystore
+id_rsa*
+id_ed25519*
+
+# local tool and editor state: settings here hold personal paths and accounts
+.claude/
+.codex/
+.compound-engineering/config.local.yaml
+*.local.*
+.vscode/
+.idea/
+.worktrees/
+
+# disk images and OS clutter
+*.vhdx
+*.vhd
+.DS_Store
+Thumbs.db
+desktop.ini
+
 # Planning notes mention private names; keep them out of the public repo.
 docs/superpowers/
