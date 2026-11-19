@@ -14,7 +14,7 @@ func applyWSL(context.Context, Deps, *state.State, string, int, time.Time) error
 	return errors.ErrUnsupported
 }
 
-func canReboot(context.Context, Deps) error { return nil }
+func CanReboot(context.Context, Deps) error { return nil }
 
 func reboot(ctx context.Context, d Deps) error {
 	_, err := d.R.Run(ctx, time.Minute, "shutdown", "-r", "+2", "runner-guard: Docker did not come back after restarts")

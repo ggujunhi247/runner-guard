@@ -131,6 +131,13 @@ Windows 러너는 CI 전용 호스트로 보고, 이미지 정리와 디스크 �
 | 업데이트 확인 | `sudo runner-guard update --check` | `... update --check` |
 | 제거 | `sudo runner-guard uninstall` | `... uninstall` |
 
+- `status` 끝의 `PROBLEM:` 줄은 사람이 고쳐야 하는 설정 문제입니다. 예:
+  - `config.toml`을 못 읽어 `concurrent`를 조정할 수 없음
+  - 5분 표본이 30분 넘게 없음
+  - 조정이 멈춤
+  - 디스크가 이미 `block_percent` 이상이라 `run`이 러너를 멈출 상황
+  - 재부팅 복구가 켜져 있는데 자동 로그온이 꺼져 있음
+  - 설치 직후와 재설치 뒤에 한 번 보세요.
 - 자동 업데이트를 끄고 버전을 고정하려면, 설정에 `"auto_update": false`를 두고 `RG_VERSION`으로 재설치합니다.
 - 새 버전을 내는 쪽은 `vX.Y.Z` 태그를 push하면 됩니다. [업데이트와 릴리스](#업데이트와-릴리스)를 보세요.
   - 릴리스 워크플로가 이전 버전의 실제 자동 업데이트를 확인합니다.
@@ -206,7 +213,7 @@ runner-guard selftest | version
 | `update_repo` | `"ggujunhi247/runner-guard"` | 업데이트를 받을 GitHub 저장소 |
 | `auto_update` | `true` | `false`면 `update`가 교체하지 않음(`--check`는 동작) |
 | `auto_tune` | `true` | `false`면 자동 조정이 바꾸지 않고 제안만 알림 |
-| `runner_config` | Linux `"/etc/gitlab-runner/config.toml"`, Windows `"C:\\GitLab-Runner\\config.toml"` | `concurrent`를 읽고 바꿀 gitlab-runner 설정 파일 |
+| `runner_config` | Linux `"/etc/gitlab-runner/config.toml"`, Windows `"C:\\GitLab-Runner\\config.toml"` | `concurrent`를 읽고 바꿀 gitlab-runner 설정 파일. 이 파일이 없으면 서비스 명령줄(`--config`, `--working-directory`)에서 실제 경로를 찾아 씁니다 |
 | `reboot_recover` | Linux `false`, Windows `true` | Docker가 재시작으로도 살아나지 않을 때 재부팅으로 복구할지. 운영 컨테이너가 있는 Linux 호스트는 끈 채로 두세요 |
 
 웹훅 URL은 비밀입니다. 호스트의 설정 파일에만 두고 저장소에 올리지 마세요.

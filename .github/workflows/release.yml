@@ -105,6 +105,11 @@ jobs:
           sudo RG_VERSION="$GITHUB_REF_NAME" sh install.sh
           test "$(runner-guard version)" = "$GITHUB_REF_NAME"
           for t in run update sample; do systemctl is-enabled "runner-guard-$t.timer"; done
+          # Real commands against the runner's Docker (no gitlab-runner here).
+          sudo runner-guard sample
+          sudo runner-guard run
+          sudo test "$(sudo grep -c . /var/lib/runner-guard/history.jsonl)" -ge 2
+          sudo runner-guard status
           sudo runner-guard tune
           sudo runner-guard uninstall
       - name: install twice, check, uninstall (Windows)
@@ -122,6 +127,10 @@ jobs:
           }
           $tr = (schtasks /Query /TN runner-guard-run /V /FO LIST | Select-String 'Task To Run').ToString()
           if ($tr -notmatch 'conhost.exe --headless') { throw "run task not headless: $tr" }
+          & $bin sample
+          if ($LASTEXITCODE -ne 0) { throw 'sample failed' }
+          $hist = Join-Path $env:ProgramData 'runner-guard\history.jsonl'
+          if (-not (Test-Path $hist)) { throw 'sample wrote no history' }
           & $bin tune
           & $bin uninstall
           if ($LASTEXITCODE -ne 0) { throw 'uninstall failed' }

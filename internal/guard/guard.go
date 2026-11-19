@@ -413,7 +413,7 @@ func (d Deps) recoverDocker(ctx context.Context, st *state.State, now time.Time,
 	if !d.Cfg.RebootRecover || now.Sub(st.LastReboot) < RebootEvery {
 		return nil
 	}
-	if err := canReboot(ctx, d); err != nil {
+	if err := CanReboot(ctx, d); err != nil {
 		warn("no recovery reboot: %v", err)
 		return nil
 	}

@@ -12,6 +12,8 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"runtime"
+	"sort"
 	"strings"
 	"time"
 
@@ -71,12 +73,12 @@ func realMain(args []string) int {
 		}
 	case "check", "status":
 		var d guard.Deps
-		if d, err = deps(os.Stdout); err == nil {
+		if d, err = deps(ctx, os.Stdout); err == nil {
 			err = runStatus(ctx, d, *asJSON, os.Stdout)
 		}
 	case "run":
 		err = withLog(func(w io.Writer) error {
-			d, err := deps(w)
+			d, err := deps(ctx, w)
 			if err != nil {
 				return err
 			}
@@ -100,7 +102,7 @@ func realMain(args []string) int {
 		err = doSample(ctx)
 	case "tune":
 		var d guard.Deps
-		if d, err = deps(os.Stdout); err == nil {
+		if d, err = deps(ctx, os.Stdout); err == nil {
 			err = doTune(d, *reset, os.Stdout)
 		}
 	case "install":
@@ -118,8 +120,8 @@ func realMain(args []string) int {
 	return 0
 }
 
-func deps(log io.Writer) (guard.Deps, error) {
-	cfg, err := config.Load(config.File())
+func deps(ctx context.Context, log io.Writer) (guard.Deps, error) {
+	cfg, err := loadConfig(ctx)
 	if err != nil {
 		return guard.Deps{}, err
 	}
@@ -143,9 +145,22 @@ func historyPath() string {
 
 func fileExists(p string) bool { _, err := os.Stat(p); return err == nil }
 
+// loadConfig loads the config and points runner_config at the config.toml
+// the runner service really uses when the configured one does not exist.
+func loadConfig(ctx context.Context) (config.Config, error) {
+	cfg, err := config.Load(config.File())
+	if err != nil {
+		return cfg, err
+	}
+	if p := runnersvc.ConfigPath(ctx, execx.OS{}, cfg.RunnerService, cfg.RunnerConfig); p != "" {
+		cfg.RunnerConfig = p
+	}
+	return cfg, nil
+}
+
 // doSample takes no lock: it only appends, and run must not delay it.
 func doSample(ctx context.Context) error {
-	cfg, err := config.Load(config.File())
+	cfg, err := loadConfig(ctx)
 	if err != nil {
 		return err
 	}
@@ -253,21 +268,27 @@ func withLog(fn func(io.Writer) error) error {
 }
 
 type statusReport struct {
-	Version       string  `json:"version"`
-	DockerHealthy bool    `json:"docker_healthy"`
-	DiskPercent   float64 `json:"disk_percent"`
-	Disk          string  `json:"disk"`
-	RunnerService string  `json:"runner_service"`
-	RunnerExists  bool    `json:"runner_exists"`
-	RunnerRunning bool    `json:"runner_running"`
-	BlockedByUs   bool    `json:"blocked_by_us"`
-	BlockReason   string  `json:"block_reason"`
-	LastRun       string  `json:"last_run"`
-	LastAction    string  `json:"last_action"`
-	DockerMillis  int64   `json:"docker_latency_ms"`
-	MemoryPercent float64 `json:"memory_percent"`
-	LoadPerCPU    float64 `json:"load_per_cpu"` // -1 on Windows
-	PressureRuns  int     `json:"pressure_runs"`
+	Version       string   `json:"version"`
+	DockerHealthy bool     `json:"docker_healthy"`
+	DiskPercent   float64  `json:"disk_percent"`
+	Disk          string   `json:"disk"`
+	RunnerService string   `json:"runner_service"`
+	RunnerExists  bool     `json:"runner_exists"`
+	RunnerRunning bool     `json:"runner_running"`
+	BlockedByUs   bool     `json:"blocked_by_us"`
+	BlockReason   string   `json:"block_reason"`
+	LastRun       string   `json:"last_run"`
+	LastAction    string   `json:"last_action"`
+	DockerMillis  int64    `json:"docker_latency_ms"`
+	MemoryPercent float64  `json:"memory_percent"`
+	LoadPerCPU    float64  `json:"load_per_cpu"` // -1 on Windows
+	PressureRuns  int      `json:"pressure_runs"`
+	RunnerConfig  string   `json:"runner_config"`
+	Concurrent    int      `json:"concurrent"` // 0: unreadable
+	Samples24h    int      `json:"samples_24h"`
+	TuneMode      string   `json:"tune_mode"`
+	LastTune      string   `json:"last_tune"`
+	Problems      []string `json:"problems"` // setup issues a person should fix
 }
 
 func runStatus(ctx context.Context, d guard.Deps, asJSON bool, w io.Writer) error {
@@ -295,6 +316,7 @@ func runStatus(ctx context.Context, d guard.Deps, asJSON bool, w io.Writer) erro
 	if !st.LastRun.IsZero() {
 		s.LastRun = st.LastRun.Format(time.RFC3339)
 	}
+	statusTune(ctx, d, st, &s)
 	if asJSON {
 		enc := json.NewEncoder(w)
 		enc.SetIndent("", "  ")
@@ -318,6 +340,13 @@ func runStatus(ctx context.Context, d guard.Deps, asJSON bool, w io.Writer) erro
 	if s.LoadPerCPU >= 0 {
 		load = fmt.Sprintf("%.2f per CPU", s.LoadPerCPU)
 	}
+	defer func() {
+		fmt.Fprintf(w, "  tune:          %s, %d sample(s) in 24h, last tune %s"+"\n", s.TuneMode, s.Samples24h, orNever(s.LastTune))
+		fmt.Fprintf(w, "  runner config: %s (concurrent %d)"+"\n", s.RunnerConfig, s.Concurrent)
+		for _, p := range s.Problems {
+			fmt.Fprintln(w, "  PROBLEM:", p)
+		}
+	}()
 	fmt.Fprintf(w, "runner-guard %s\n  docker:        %s (%dms)\n  disk:          %s\n  memory:        %.0f%%, load %s (over threshold %d run(s) in a row)\n  runner:        %s %s\n  blocked_by_us: %s\n  last_run:      %s\n  last_action:   %s\n",
 		s.Version, docker, s.DockerMillis, s.Disk, s.MemoryPercent, load, s.PressureRuns, s.RunnerService, runner, blocked, s.LastRun, s.LastAction)
 	return nil
@@ -494,4 +523,64 @@ func selftest() error {
 		return fmt.Errorf("selftest failed: %s", strings.Join(fails, ", "))
 	}
 	return nil
+}
+
+func orNever(s string) string {
+	if s == "" {
+		return "never"
+	}
+	return s
+}
+
+// statusTune fills the tuning part of status and lists setup problems that
+// would quietly stop tuning or recovery from working.
+func statusTune(ctx context.Context, d guard.Deps, st state.State, s *statusReport) {
+	s.RunnerConfig = d.Cfg.RunnerConfig
+	if n, err := tune.ReadConcurrent(d.Cfg.RunnerConfig); err == nil {
+		s.Concurrent = n
+	} else if s.RunnerExists {
+		s.Problems = append(s.Problems, fmt.Sprintf("cannot read concurrent from %s; set runner_config (%v)", d.Cfg.RunnerConfig, err))
+	}
+	s.TuneMode = "auto"
+	if !d.Cfg.AutoTune || fileExists(guard.KillSwitch(config.Dir())) {
+		s.TuneMode = "report only"
+	}
+	if !st.LastTune.IsZero() {
+		s.LastTune = st.LastTune.Format(time.RFC3339)
+	}
+	now := time.Now()
+	h, _ := tune.Load(d.HistoryPath, now.Add(-24*time.Hour))
+	s.Samples24h = len(h)
+	if fileExists(config.BinPath()) && !st.LastRun.IsZero() {
+		if last := lastSample(h); last.IsZero() || now.Sub(last) > 30*time.Minute {
+			s.Problems = append(s.Problems, "no usage sample in the last 30 min; is the runner-guard-sample task/timer running?")
+		}
+	}
+	for name, k := range map[string]state.Knob{tune.Concurrent: st.Concurrent, tune.WSLMemory: st.WSLMemoryGB, tune.WSLSwap: st.WSLSwapGB, tune.Prune: st.PrunePercent} {
+		if k.Frozen {
+			s.Problems = append(s.Problems, name+" tuning is frozen; check the log, then runner-guard tune --reset")
+		}
+	}
+	if s.DockerHealthy && s.DiskPercent >= d.Cfg.BlockPercent {
+		fix := "free space"
+		if runtime.GOOS == "windows" {
+			fix += " or raise desktop_budget_gb"
+		}
+		s.Problems = append(s.Problems, fmt.Sprintf("disk %.0f%% >= block_percent %g: run stops the runner until it falls below %g%%; %s", s.DiskPercent, d.Cfg.BlockPercent, guard.PrunePercent(d, st), fix))
+	}
+	if d.Cfg.RebootRecover {
+		if err := guard.CanReboot(ctx, d); err != nil {
+			s.Problems = append(s.Problems, "reboot_recover is on but "+err.Error())
+		}
+	}
+	sort.Strings(s.Problems)
+}
+
+func lastSample(h []tune.Sample) time.Time {
+	for i := len(h) - 1; i >= 0; i-- {
+		if h[i].Kind == "" {
+			return h[i].T
+		}
+	}
+	return time.Time{}
 }

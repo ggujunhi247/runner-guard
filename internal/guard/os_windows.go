@@ -114,7 +114,7 @@ func applyWSL(ctx context.Context, d Deps, st *state.State, key string, gb int, 
 
 // canReboot: the scheduled tasks need a logged-on user, so a reboot only
 // helps when Windows logs on by itself.
-func canReboot(ctx context.Context, d Deps) error {
+func CanReboot(ctx context.Context, d Deps) error {
 	out, err := d.R.Run(ctx, time.Minute, "reg", "query", `HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon`, "/v", "AutoAdminLogon")
 	f := strings.Fields(out)
 	if err != nil || len(f) == 0 || f[len(f)-1] != "1" {
