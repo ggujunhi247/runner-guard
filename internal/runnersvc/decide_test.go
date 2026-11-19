@@ -27,3 +27,9 @@ func TestDecideTable(t *testing.T) {
 		}
 	}
 }
+
+func TestTuneStopLiftsLikeDocker(t *testing.T) {
+	if Decide(true, 80, 75, 90, false, true, ReasonTune) != Unblock {
+		t.Fatal("tune stop must lift once Docker answers and disk < block")
+	}
+}

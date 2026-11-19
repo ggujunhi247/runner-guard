@@ -50,3 +50,22 @@ func TestStuckAge(t *testing.T) {
 		t.Fatalf("got %v %v", d, err)
 	}
 }
+
+func TestClampFixesUnusableThresholds(t *testing.T) {
+	c := Default()
+	if w := c.Clamp(); w != "" {
+		t.Fatalf("defaults clamped: %s", w)
+	}
+	c.PrunePercent, c.BlockPercent = 92, 97
+	if w := c.Clamp(); w == "" || c.BlockPercent != 95 || c.PrunePercent != 92 {
+		t.Fatalf("%v %v %q", c.PrunePercent, c.BlockPercent, w)
+	}
+}
+
+func TestClampPruneAboveBlock(t *testing.T) {
+	c := Default()
+	c.PrunePercent = 90
+	if w := c.Clamp(); w == "" || c.PrunePercent != 80 {
+		t.Fatal(c.PrunePercent, w)
+	}
+}

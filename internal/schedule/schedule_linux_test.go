@@ -23,6 +23,9 @@ func TestInstallLinuxUnits(t *testing.T) {
 			t.Errorf("run timer lacks %s", want)
 		}
 	}
+	if !strings.Contains(read("runner-guard-sample.service"), "ExecStart=/usr/local/bin/runner-guard sample") {
+		t.Error("sample service")
+	}
 	for _, want := range []string{"OnCalendar=daily", "RandomizedDelaySec=1h"} {
 		if !strings.Contains(read("runner-guard-update.timer"), want) {
 			t.Errorf("update timer lacks %s", want)
@@ -35,7 +38,18 @@ func TestInstallLinuxUnits(t *testing.T) {
 		}
 	}
 	last := f.Calls[len(f.Calls)-1]
-	if !reflect.DeepEqual(last, []string{"systemctl", "enable", "--now", "runner-guard-run.timer", "runner-guard-update.timer"}) {
+	if !reflect.DeepEqual(last, []string{"systemctl", "enable", "--now", "runner-guard-run.timer", "runner-guard-update.timer", "runner-guard-sample.timer"}) {
 		t.Fatalf("last call %v", last)
+	}
+}
+
+func TestEnsureSampleOnlyWhenMissing(t *testing.T) {
+	unitDir = t.TempDir()
+	f := &execx.Fake{}
+	if added, err := EnsureSample(context.Background(), f, "/usr/local/bin/runner-guard"); !added || err != nil {
+		t.Fatal(added, err)
+	}
+	if added, _ := EnsureSample(context.Background(), f, "/usr/local/bin/runner-guard"); added {
+		t.Fatal("added twice")
 	}
 }

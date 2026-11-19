@@ -25,6 +25,11 @@ type Config struct {
 	AlertWebhook             string   `json:"alert_webhook"`
 	UpdateRepo               string   `json:"update_repo"`
 	AutoUpdate               bool     `json:"auto_update"`
+	// AutoTune lets the daily tune pass change concurrent, WSL memory/swap and
+	// lower prune_percent once enough history exists. False: report only.
+	AutoTune      bool   `json:"auto_tune"`
+	RunnerConfig  string `json:"runner_config"`  // gitlab-runner config.toml
+	RebootRecover bool   `json:"reboot_recover"` // reboot when Docker stays dead after restarts
 }
 
 func Default() Config {
@@ -41,6 +46,7 @@ func Default() Config {
 		StuckContainerAge: "6h",
 		UpdateRepo:        "ggujunhi247/runner-guard",
 		AutoUpdate:        true,
+		AutoTune:          true,
 	}
 	osDefaults(&c)
 	return c
@@ -75,6 +81,24 @@ func (c Config) Durations() (imageAge string, restartMin time.Duration, err erro
 		return "", 0, err
 	}
 	return c.ImageAge, restartMin, nil
+}
+
+// Clamp fixes thresholds that cannot work: block_percent is the safety stop
+// (at most 95) and prune must start below it. It never fails, so an old config
+// cannot stop the guard from starting a runner it blocked; it returns a warning.
+func (c *Config) Clamp() string {
+	was := fmt.Sprintf("prune_percent %g, block_percent %g", c.PrunePercent, c.BlockPercent)
+	changed := false
+	if c.BlockPercent > 95 || c.BlockPercent <= 10 {
+		c.BlockPercent, changed = min(max(c.BlockPercent, 20), 95), true
+	}
+	if c.PrunePercent <= 0 || c.PrunePercent >= c.BlockPercent {
+		c.PrunePercent, changed = c.BlockPercent-10, true
+	}
+	if !changed {
+		return ""
+	}
+	return fmt.Sprintf("config %s is unusable; using prune_percent %g, block_percent %g (need 0 < prune < block <= 95)", was, c.PrunePercent, c.BlockPercent)
 }
 
 // StuckAge parses stuck_container_age; 0 means off. Values under an hour

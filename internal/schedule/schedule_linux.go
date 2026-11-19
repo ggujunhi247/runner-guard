@@ -16,7 +16,7 @@ var unitDir = "/etc/systemd/system"
 
 const timeout = 60 * time.Second
 
-var timers = []string{"runner-guard-run.timer", "runner-guard-update.timer"}
+var timers = []string{"runner-guard-run.timer", "runner-guard-update.timer", "runner-guard-sample.timer"}
 
 func service(bin, cmd string) string {
 	return fmt.Sprintf(`[Unit]
@@ -57,13 +57,45 @@ Persistent=true
 WantedBy=timers.target
 `
 
+const sampleTimer = `[Unit]
+Description=runner-guard usage sample every 5 minutes
+
+[Timer]
+OnActiveSec=5min
+OnUnitActiveSec=5min
+AccuracySec=30s
+
+[Install]
+WantedBy=timers.target
+`
+
 func units(bin string) map[string]string {
 	return map[string]string{
 		"runner-guard-run.service":    service(bin, "run"),
 		"runner-guard-run.timer":      runTimer,
 		"runner-guard-update.service": service(bin, "update"),
 		"runner-guard-update.timer":   updateTimer,
+		"runner-guard-sample.service": service(bin, "sample"),
+		"runner-guard-sample.timer":   sampleTimer,
 	}
+}
+
+// EnsureSample adds the sample timer on hosts installed before it existed.
+func EnsureSample(ctx context.Context, r execx.Runner, bin string) (bool, error) {
+	if _, err := os.Stat(filepath.Join(unitDir, "runner-guard-sample.timer")); err == nil {
+		return false, nil
+	}
+	u := units(bin)
+	for _, name := range []string{"runner-guard-sample.service", "runner-guard-sample.timer"} {
+		if err := os.WriteFile(filepath.Join(unitDir, name), []byte(u[name]), 0o644); err != nil {
+			return false, err
+		}
+	}
+	if _, err := r.Run(ctx, timeout, "systemctl", "daemon-reload"); err != nil {
+		return false, err
+	}
+	_, err := r.Run(ctx, timeout, "systemctl", "enable", "--now", "runner-guard-sample.timer")
+	return err == nil, err
 }
 
 func Install(ctx context.Context, r execx.Runner, bin string) error {

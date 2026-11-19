@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -15,6 +16,7 @@ import (
 	"github.com/ggujunhi247/runner-guard/internal/pressure"
 	"github.com/ggujunhi247/runner-guard/internal/runnersvc"
 	"github.com/ggujunhi247/runner-guard/internal/state"
+	"github.com/ggujunhi247/runner-guard/internal/tune"
 )
 
 var now = time.Date(2026, 11, 13, 12, 0, 0, 0, time.UTC)
@@ -121,7 +123,9 @@ func TestDockerDeadRestartsAndRecovers(t *testing.T) {
 	f := &execx.Fake{Responses: responses(false, svcRunning)}
 	d := newDeps(t, f, 50)
 	d.Sleep = func(time.Duration) { // engine comes back after the restart
-		f.Responses["docker info --format {{.ServerVersion}}"] = execx.FakeResponse{Out: "27.0.0"}
+		if called(f, "restart") {
+			f.Responses["docker info --format {{.ServerVersion}}"] = execx.FakeResponse{Out: "27.0.0"}
+		}
 	}
 	rep, err := Run(context.Background(), d, false)
 	if err != nil {
@@ -354,5 +358,164 @@ func TestPressureAlertsOnceWhenSustained(t *testing.T) {
 	Run(context.Background(), d, false)
 	if s, _ := state.Load(d.StatePath); s.PressureRuns != 0 {
 		t.Fatalf("streak not reset: %d", s.PressureRuns)
+	}
+}
+
+func TestSlowDockerOnceIsNotRestarted(t *testing.T) {
+	f := &execx.Fake{Responses: responses(false, svcRunning)}
+	d := newDeps(t, f, 50)
+	d.Sleep = func(time.Duration) { // answers on the re-check
+		f.Responses["docker info --format {{.ServerVersion}}"] = execx.FakeResponse{Out: "27.0.0"}
+	}
+	rep, err := Run(context.Background(), d, false)
+	if err != nil || rep.Restarted || !rep.DockerHealthy || called(f, "restart") {
+		t.Fatalf("rep %+v err %v calls %v", rep, err, f.Calls)
+	}
+}
+
+func rebooted(f *execx.Fake) int {
+	n := 0
+	for _, c := range f.Calls {
+		if c[0] == "shutdown" {
+			n++
+		}
+	}
+	return n
+}
+
+func TestRebootRecoveryOnceThenWaitsForAPerson(t *testing.T) {
+	f := &execx.Fake{Responses: responses(false, svcRunning)}
+	f.Responses[`reg query HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon /v AutoAdminLogon`] = execx.FakeResponse{Out: "    AutoAdminLogon    REG_SZ    1\r\n"}
+	d := newDeps(t, f, 50)
+	d.Cfg.RebootRecover = true
+	var alerts []string
+	d.Alert = func(_ context.Context, msg string) error { alerts = append(alerts, msg); return nil }
+	capped := state.State{DockerRestarts: []time.Time{now.Add(-time.Hour), now.Add(-2 * time.Hour), now.Add(-3 * time.Hour)}}
+	state.Save(d.StatePath, capped)
+	if _, err := Run(context.Background(), d, false); err != nil {
+		t.Fatal(err)
+	}
+	st, _ := state.Load(d.StatePath)
+	if rebooted(f) != 1 || !st.RebootPending || !strings.Contains(strings.Join(alerts, ";"), "rebooting") {
+		t.Fatalf("no reboot: %+v alerts %v calls %v", st, alerts, f.Calls)
+	}
+	// After the reboot Docker is still dead: never reboot again.
+	d.Now = func() time.Time { return now.Add(8 * 24 * time.Hour) }
+	st.DockerRestarts = []time.Time{now.Add(8*24*time.Hour - time.Hour), now.Add(8*24*time.Hour - 2*time.Hour), now.Add(8*24*time.Hour - 3*time.Hour)}
+	state.Save(d.StatePath, st)
+	Run(context.Background(), d, false)
+	if rebooted(f) != 1 {
+		t.Fatalf("rebooted twice: %v", f.Calls)
+	}
+	// Docker answers again: the pending flag clears with a "back" alert.
+	f.Responses["docker info --format {{.ServerVersion}}"] = execx.FakeResponse{Out: "27.0.0"}
+	Run(context.Background(), d, false)
+	if st, _ := state.Load(d.StatePath); st.RebootPending || !strings.Contains(strings.Join(alerts, ";"), "back after the recovery reboot") {
+		t.Fatalf("%+v %v", st, alerts)
+	}
+}
+
+func TestNoRebootWithoutAutoLogonOrSwitch(t *testing.T) {
+	f := &execx.Fake{Responses: responses(false, svcRunning)}
+	d := newDeps(t, f, 50)
+	d.Cfg.RebootRecover = runtime.GOOS == "windows" // Windows: on, but no auto-logon
+	state.Save(d.StatePath, state.State{DockerRestarts: []time.Time{now.Add(-time.Hour), now.Add(-2 * time.Hour), now.Add(-3 * time.Hour)}})
+	Run(context.Background(), d, false)
+	if rebooted(f) != 0 {
+		t.Fatalf("rebooted: %v", f.Calls)
+	}
+}
+
+func TestDockerBlockOverDiskLimitBecomesDiskBlock(t *testing.T) {
+	f := &execx.Fake{Responses: responses(true, svcStopped)}
+	d := newDeps(t, f, 95)
+	state.Save(d.StatePath, state.State{BlockedByUs: true, BlockReason: runnersvc.ReasonDocker})
+	Run(context.Background(), d, false)
+	if st, _ := state.Load(d.StatePath); st.BlockReason != runnersvc.ReasonDisk {
+		t.Fatalf("reason %q", st.BlockReason)
+	}
+}
+
+func TestRemindsWhileBlocked(t *testing.T) {
+	f := &execx.Fake{Responses: responses(true, svcStopped)}
+	d := newDeps(t, f, 80) // between prune and block: stays blocked
+	var alerts []string
+	d.Alert = func(_ context.Context, msg string) error { alerts = append(alerts, msg); return nil }
+	d.Cfg.PruneImages = false
+	state.Save(d.StatePath, state.State{BlockedByUs: true, BlockReason: runnersvc.ReasonDisk, BlockedAt: now.Add(-7 * time.Hour), LastReclaim: now})
+	Run(context.Background(), d, false)
+	if len(alerts) != 1 || !strings.Contains(alerts[0], "still stopped") {
+		t.Fatalf("alerts %v", alerts)
+	}
+	Run(context.Background(), d, false) // same hour: no repeat
+	if len(alerts) != 1 {
+		t.Fatalf("repeated: %v", alerts)
+	}
+}
+
+func writeHistory(t *testing.T, path string, conc int) {
+	t.Helper()
+	for i := 0; i < 288; i++ {
+		tune.Append(path, tune.Sample{T: now.Add(-time.Duration(288-i) * tune.Interval), Concurrent: conc, Jobs: 1})
+	}
+}
+
+func TestDailyTuneAppliesOneChange(t *testing.T) {
+	f := &execx.Fake{Responses: responses(true, svcRunning)}
+	d := newDeps(t, f, 50)
+	d.HistoryPath = filepath.Join(filepath.Dir(d.StatePath), "history.jsonl")
+	writeHistory(t, d.HistoryPath, runtime.NumCPU()+2) // above the core count
+	var applied []tune.Change
+	d.Apply = func(_ context.Context, c tune.Change) error { applied = append(applied, c); return nil }
+	var alerts []string
+	d.Alert = func(_ context.Context, msg string) error { alerts = append(alerts, msg); return nil }
+	Run(context.Background(), d, false)
+	if len(applied) != 1 || applied[0].To != float64(runtime.NumCPU()+1) {
+		t.Fatalf("applied %+v", applied)
+	}
+	st, _ := state.Load(d.StatePath)
+	if st.Concurrent.Value != float64(runtime.NumCPU()+1) || !strings.Contains(strings.Join(alerts, ";"), "tuned concurrent") {
+		t.Fatalf("%+v %v", st.Concurrent, alerts)
+	}
+	Run(context.Background(), d, false) // once a day
+	if len(applied) != 1 {
+		t.Fatalf("tuned twice: %+v", applied)
+	}
+}
+
+func TestKillSwitchOnlyReports(t *testing.T) {
+	f := &execx.Fake{Responses: responses(true, svcRunning)}
+	d := newDeps(t, f, 50)
+	d.HistoryPath = filepath.Join(filepath.Dir(d.StatePath), "history.jsonl")
+	writeHistory(t, d.HistoryPath, runtime.NumCPU()+2)
+	d.Exists = func(p string) bool { return strings.HasSuffix(p, "tune.disabled") }
+	d.Apply = func(context.Context, tune.Change) error { t.Fatal("applied with the kill switch on"); return nil }
+	var alerts []string
+	d.Alert = func(_ context.Context, msg string) error { alerts = append(alerts, msg); return nil }
+	Run(context.Background(), d, false)
+	if !strings.Contains(strings.Join(alerts, ";"), "report only") {
+		t.Fatalf("%v", alerts)
+	}
+}
+
+func TestBusyTuneRetriesNextHour(t *testing.T) {
+	f := &execx.Fake{Responses: responses(true, svcRunning)}
+	d := newDeps(t, f, 50)
+	d.HistoryPath = filepath.Join(filepath.Dir(d.StatePath), "history.jsonl")
+	writeHistory(t, d.HistoryPath, runtime.NumCPU()+2)
+	d.Apply = func(context.Context, tune.Change) error { return errBusy }
+	Run(context.Background(), d, false)
+	if st, _ := state.Load(d.StatePath); !st.LastTune.IsZero() || st.Concurrent.Value != 0 {
+		t.Fatalf("busy change consumed the day: %+v", st)
+	}
+}
+
+func TestRecoveryRebootGetsFreshRestarts(t *testing.T) {
+	f := &execx.Fake{Responses: responses(false, svcRunning)}
+	d := newDeps(t, f, 50)
+	state.Save(d.StatePath, state.State{RebootPending: true, LastReboot: now.Add(-20 * time.Minute),
+		DockerRestarts: []time.Time{now.Add(-time.Hour), now.Add(-2 * time.Hour), now.Add(-3 * time.Hour)}})
+	if rep, _ := Run(context.Background(), d, false); !rep.Restarted {
+		t.Fatalf("no restart after the reboot: %v", f.Calls)
 	}
 }

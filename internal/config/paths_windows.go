@@ -20,4 +20,8 @@ func BinPath() string { return filepath.Join(Dir(), "runner-guard.exe") }
 func osDefaults(c *Config) {
 	c.PruneImages = true
 	c.DesktopReclaim = true
+	c.RunnerConfig = `C:\GitLab-Runner\config.toml`
+	// Only after Docker stays dead through restarts and a WSL restart, at
+	// most weekly, and only with automatic logon (the tasks need a session).
+	c.RebootRecover = true
 }

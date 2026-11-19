@@ -17,6 +17,7 @@ import (
 	"github.com/ggujunhi247/runner-guard/internal/pressure"
 	"github.com/ggujunhi247/runner-guard/internal/runnersvc"
 	"github.com/ggujunhi247/runner-guard/internal/state"
+	"github.com/ggujunhi247/runner-guard/internal/tune"
 )
 
 // LockStale is how old a lock must be before another run takes it over.
@@ -30,6 +31,12 @@ const (
 
 // ReclaimEvery limits Docker Desktop disk compaction (it stops Docker).
 const ReclaimEvery = 24 * time.Hour
+
+// RemindEvery repeats the alert while the runner stays stopped or Docker stays dead.
+const RemindEvery = 6 * time.Hour
+
+// RebootEvery limits recovery reboots.
+const RebootEvery = 7 * 24 * time.Hour
 
 type Deps struct {
 	R                   execx.Runner
@@ -48,6 +55,16 @@ type Deps struct {
 	Alert func(ctx context.Context, msg string) error
 	// Pressure overrides pressure.Read (tests). Nil uses pressure.Read.
 	Pressure func() (pressure.Sample, error)
+	// HistoryPath is history.jsonl. Empty turns off the run record and tuning.
+	HistoryPath string
+	// Apply overrides how a tune change is applied (tests). Nil: the real thing.
+	Apply func(context.Context, tune.Change) error
+}
+
+func (d Deps) sleep(t time.Duration) {
+	if d.Sleep != nil {
+		d.Sleep(t)
+	}
 }
 
 // MeasurePressure samples host memory and load.
@@ -136,12 +153,24 @@ func Run(ctx context.Context, d Deps, force bool) (Report, error) {
 	if w != "" {
 		warn("%s", w)
 	}
+	if w := d.Cfg.Clamp(); w != "" {
+		warn("%s", w)
+	}
+	// After a recovery reboot Docker gets a fresh set of restarts: Docker
+	// Desktop may simply not have been started at logon.
+	if st.RebootPending {
+		var kept []time.Time
+		for _, t := range st.DockerRestarts {
+			if t.After(st.LastReboot) {
+				kept = append(kept, t)
+			}
+		}
+		st.DockerRestarts = kept
+	}
 	var did []string
 	waitHealthy := func() {
 		for i := 0; i < restartWaits && !rep.DockerHealthy; i++ {
-			if d.Sleep != nil {
-				d.Sleep(restartPoll)
-			}
+			d.sleep(restartPoll)
 			rep.DockerHealthy = dockerctl.Healthy(ctx, d.R)
 		}
 	}
@@ -150,6 +179,12 @@ func Run(ctx context.Context, d Deps, force bool) (Report, error) {
 	start := time.Now()
 	err = dockerctl.Check(ctx, d.R)
 	rep.DockerLatency = time.Since(start)
+	// A restart kills every running job: one slow answer from a busy engine
+	// is not enough, ask twice more.
+	for i := 0; i < 2 && err != nil && !errors.Is(err, execx.ErrNotFound); i++ {
+		d.sleep(restartPoll)
+		err = dockerctl.Check(ctx, d.R)
+	}
 	if errors.Is(err, execx.ErrNotFound) {
 		// A misconfigured guard must not take the runner down.
 		return rep, d.stillBlocked(fmt.Errorf("docker CLI not found in PATH; nothing changed: %w", err))
@@ -169,10 +204,17 @@ func Run(ctx context.Context, d Deps, force bool) (Report, error) {
 			}
 		} else {
 			warn("docker unhealthy and restart not allowed (interval or daily cap)")
+			if len(dockerctl.Trim(now, st.DockerRestarts)) >= d.Cfg.DockerRestartMaxPerDay {
+				did = append(did, d.recoverDocker(ctx, &st, now, &rep, waitHealthy, warn)...)
+			}
 		}
 	}
+	if st.RebootPending && rep.DockerHealthy {
+		st.RebootPending = false
+		did = append(did, "Docker is back after the recovery reboot")
+	}
 
-	measured := false
+	measured, firstPct := false, 0.0
 	measure := func(label string) {
 		pct, desc, err := d.MeasureUsage(ctx)
 		if err != nil {
@@ -197,7 +239,8 @@ func Run(ctx context.Context, d Deps, force bool) (Report, error) {
 
 	if rep.DockerHealthy {
 		measure("")
-		if measured && disk.ShouldPrune(rep.Pct, d.Cfg.PrunePercent, force) {
+		firstPct = rep.Pct
+		if measured && disk.ShouldPrune(rep.Pct, PrunePercent(d, st), force) {
 			rep.Pruned = true
 			did = append(did, fmt.Sprintf("pruned at %.1f%%", rep.Pct))
 			if err := disk.Prune(ctx, d.R, d.Cfg); err != nil {
@@ -219,7 +262,7 @@ func Run(ctx context.Context, d Deps, force bool) (Report, error) {
 			}
 			// Record before stopping: a crash or failed save after the stop
 			// must not leave a stopped runner nobody will restart.
-			st.BlockedByUs, st.BlockReason = true, reason
+			st.BlockedByUs, st.BlockReason, st.BlockedAt = true, reason, now
 			if err := state.Save(d.StatePath, st); err != nil {
 				st.BlockedByUs, st.BlockReason = false, ""
 				warn("save state before stopping %s: %v; not stopping", name, err)
@@ -256,6 +299,11 @@ func Run(ctx context.Context, d Deps, force bool) (Report, error) {
 		warn("disk usage unknown; blocking skipped")
 	default:
 		decide()
+		// A Docker block whose disk is now over the limit is a disk block:
+		// only that lifts at prune_percent and lets reclaim run.
+		if st.BlockedByUs && !running && rep.DockerHealthy && st.BlockReason == runnersvc.ReasonDocker && rep.Pct >= d.Cfg.BlockPercent {
+			st.BlockReason = runnersvc.ReasonDisk
+		}
 		// Docker Desktop: with the runner stopped for disk, compacting the
 		// data disk (which stops Docker) cannot hurt a job.
 		if d.Cfg.DesktopReclaim && rep.DockerHealthy && !running && st.BlockedByUs &&
@@ -302,6 +350,36 @@ func Run(ctx context.Context, d Deps, force bool) (Report, error) {
 		}
 	}
 
+	if d.HistoryPath != "" {
+		if rep.DockerHealthy && measured {
+			r := tune.Sample{T: now.UTC(), Kind: "run", Disk: firstPct, DiskEnd: rep.Pct,
+				Skip: tune.SkipReason(st, now, rep.DockerHealthy, running)}
+			if err := tune.Append(d.HistoryPath, r); err != nil {
+				logf("warning: history: %v", err)
+			}
+		}
+		if rep.DockerHealthy && !st.BlockedByUs && now.Sub(st.LastTune) >= TuneEvery {
+			msgs, retry := dailyTune(ctx, d, &st, now, logf)
+			if !retry { // a change deferred for a busy runner is tried again next hour
+				st.LastTune = now
+			}
+			did = append(did, msgs...)
+		}
+	}
+
+	// Nothing new happened but something is still broken: say so every few hours.
+	if len(notable(did)) == 0 && now.Sub(st.LastRemind) >= RemindEvery {
+		switch {
+		case st.BlockedByUs && now.Sub(st.BlockedAt) >= RemindEvery:
+			did = append(did, fmt.Sprintf("%s still stopped by runner-guard (%s) since %s", name, st.BlockReason, st.BlockedAt.Format(time.RFC3339)))
+		case !rep.DockerHealthy:
+			did = append(did, "Docker still not responding")
+		}
+		if len(notable(did)) > 0 {
+			st.LastRemind = now
+		}
+	}
+
 	st.DockerRestarts = dockerctl.Trim(now, st.DockerRestarts)
 	st.LastRun = now
 	if len(did) > 0 {
@@ -313,17 +391,64 @@ func Run(ctx context.Context, d Deps, force bool) (Report, error) {
 	logf("run done: docker_healthy=%v docker_latency=%s restarted=%v disk=%.1f%% pruned=%v stuck_removed=%d mem=%.0f%% load_per_cpu=%.2f action=%s warnings=%d",
 		rep.DockerHealthy, rep.DockerLatency.Round(time.Millisecond), rep.Restarted, rep.Pct, rep.Pruned, len(rep.Stuck),
 		rep.Pressure.MemPct, rep.Pressure.LoadPerCPU, rep.Action, len(rep.Warnings))
-	var notable []string // pruning repeats hourly at high usage; not worth a ping
-	for _, s := range did {
-		if !strings.HasPrefix(s, "pruned") {
-			notable = append(notable, s)
-		}
-	}
-	if len(notable) > 0 && d.Alert != nil {
+	if n := notable(did); len(n) > 0 && d.Alert != nil {
 		host, _ := os.Hostname()
-		if err := d.Alert(ctx, fmt.Sprintf("[runner-guard] %s: %s", host, strings.Join(notable, "; "))); err != nil {
+		if err := d.Alert(ctx, fmt.Sprintf("[runner-guard] %s: %s", host, strings.Join(n, "; "))); err != nil {
 			logf("warning: alert: %v", err)
 		}
 	}
 	return rep, nil
+}
+
+// recoverDocker runs once the daily restart cap is used up: a WSL restart
+// (Windows), then, if allowed, one reboot. A reboot that did not help is
+// never repeated until Docker has answered again.
+func (d Deps) recoverDocker(ctx context.Context, st *state.State, now time.Time, rep *Report, wait func(), warn func(string, ...any)) []string {
+	if st.RebootPending {
+		if now.Sub(st.LastRemind) >= RemindEvery {
+			st.LastRemind = now
+			return []string{"Docker still dead after the recovery reboot and restarts; no more reboots, needs a person"}
+		}
+		return nil
+	}
+	if now.Sub(st.LastWSLRecover) >= ReclaimEvery {
+		if err := osRecover(ctx, d); !errors.Is(err, errors.ErrUnsupported) {
+			st.LastWSLRecover = now
+			rep.DockerHealthy = dockerctl.Healthy(ctx, d.R)
+			wait()
+			if rep.DockerHealthy {
+				return []string{"Docker back after a WSL restart"}
+			}
+			warn("WSL restart did not bring Docker back: %v", err)
+		}
+	}
+	if !d.Cfg.RebootRecover || now.Sub(st.LastReboot) < RebootEvery {
+		return nil
+	}
+	if err := canReboot(ctx, d); err != nil {
+		warn("no recovery reboot: %v", err)
+		return nil
+	}
+	st.RebootPending, st.LastReboot = true, now
+	if err := state.Save(d.StatePath, *st); err != nil {
+		st.RebootPending = false
+		warn("save state before reboot: %v; not rebooting", err)
+		return nil
+	}
+	if err := reboot(ctx, d); err != nil {
+		st.RebootPending = false
+		return []string{fmt.Sprintf("recovery reboot FAILED: %v", err)}
+	}
+	return []string{"Docker dead after the daily restarts; rebooting in 2 minutes"}
+}
+
+// notable drops pruning, which repeats hourly at high usage; not worth a ping.
+func notable(did []string) []string {
+	var n []string
+	for _, s := range did {
+		if !strings.HasPrefix(s, "pruned") {
+			n = append(n, s)
+		}
+	}
+	return n
 }

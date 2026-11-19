@@ -2,6 +2,7 @@ package schedule
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -29,8 +30,21 @@ func TestInstallWindowsCommands(t *testing.T) {
 			"/TN", "runner-guard-update", "/SC", "DAILY", "/ST", "10:35", "/TR", `"` + bin + `" update`},
 		{"schtasks", "/Create", "/F", "/IT", "/RU", user,
 			"/TN", "runner-guard-desktop", "/SC", "ONCE", "/ST", "00:00", "/TR", `"` + desktop + `"`},
+		{"schtasks", "/Create", "/F", "/RL", "HIGHEST", "/IT", "/RU", user,
+			"/TN", "runner-guard-sample", "/SC", "MINUTE", "/MO", "5", "/TR", `conhost.exe --headless "` + bin + `" sample`},
 	}
 	if !reflect.DeepEqual(f.Calls, want) {
 		t.Fatalf("calls\n%q\nwant\n%q", f.Calls, want)
+	}
+}
+
+func TestEnsureSampleOnlyWhenMissing(t *testing.T) {
+	f := &execx.Fake{}
+	if added, err := EnsureSample(context.Background(), f, `C:\x.exe`); added || err != nil || len(f.Calls) != 1 {
+		t.Fatalf("existing task touched: %v %v %v", added, err, f.Calls)
+	}
+	f = &execx.Fake{Responses: map[string]execx.FakeResponse{"schtasks /Query /TN runner-guard-sample": {Err: errors.New("not found")}}}
+	if added, err := EnsureSample(context.Background(), f, `C:\x.exe`); !added || err != nil || len(f.Calls) != 2 {
+		t.Fatalf("missing task not added: %v %v %v", added, err, f.Calls)
 	}
 }

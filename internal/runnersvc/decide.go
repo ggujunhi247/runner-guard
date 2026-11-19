@@ -21,6 +21,7 @@ func (a Action) String() string {
 const (
 	ReasonDocker = "docker"
 	ReasonDisk   = "disk"
+	ReasonTune   = "tune" // stopped to restart WSL with new settings
 )
 
 const timeout = 60 * time.Second
@@ -42,7 +43,7 @@ func Decide(healthy bool, pct, prunePct, blockPct float64, running, blockedByUs 
 	if running {
 		return ClearFlag
 	}
-	if reason == ReasonDocker || pct < prunePct {
+	if reason == ReasonDocker || reason == ReasonTune || pct < prunePct {
 		return Unblock
 	}
 	return None

@@ -22,9 +22,11 @@ const (
 	cmdTimeout   = 60 * time.Second
 )
 
-var units = map[string]float64{"b": 1, "kb": 1e3, "mb": 1e6, "gb": 1e9, "tb": 1e12, "pb": 1e15}
+var units = map[string]float64{"b": 1, "kb": 1e3, "mb": 1e6, "gb": 1e9, "tb": 1e12, "pb": 1e15,
+	"kib": 1 << 10, "mib": 1 << 20, "gib": 1 << 30, "tib": 1 << 40}
 
-// ParseSize parses Docker's human sizes ("1.5GB", "512kB"); units are decimal.
+// ParseSize parses Docker's human sizes: "1.5GB", "512kB" (decimal) and
+// "12.3MiB" (binary, as docker stats prints).
 func ParseSize(s string) (float64, error) {
 	s = strings.TrimSpace(s)
 	i := strings.IndexFunc(s, func(r rune) bool { return (r < '0' || r > '9') && r != '.' })

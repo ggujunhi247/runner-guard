@@ -22,6 +22,7 @@ const (
 type Sample struct {
 	MemPct     float64 // used physical memory, percent
 	LoadPerCPU float64 // 1-minute load / CPU count; -1 where the OS has no load average
+	TotalMB    float64 // physical memory; 0 where not read
 }
 
 // Reasons lists what is over its threshold; empty means fine.

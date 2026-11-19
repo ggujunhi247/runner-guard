@@ -22,5 +22,5 @@ func Read() (Sample, error) {
 	if ok, _, err := procGlobalMemoryStatusEx.Call(uintptr(unsafe.Pointer(&m))); ok == 0 {
 		return Sample{}, fmt.Errorf("GlobalMemoryStatusEx: %w", err)
 	}
-	return Sample{MemPct: float64(m.MemoryLoad), LoadPerCPU: -1}, nil
+	return Sample{MemPct: float64(m.MemoryLoad), LoadPerCPU: -1, TotalMB: float64(m.TotalPhys) / (1 << 20)}, nil
 }

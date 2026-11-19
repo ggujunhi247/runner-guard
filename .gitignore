@@ -46,3 +46,9 @@ desktop.ini
 
 # Planning notes mention private names; keep them out of the public repo.
 docs/superpowers/
+
+# tuning data written on hosts
+history.jsonl
+history.jsonl.new
+wslconfig.last-good
+tune.disabled

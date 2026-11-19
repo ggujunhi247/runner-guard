@@ -16,7 +16,9 @@ const timeout = 60 * time.Second
 
 var now = time.Now // tests pin the clock
 
-var tasks = []string{"runner-guard-run", "runner-guard-update", dockerctl.DesktopTask}
+const sampleTask = "runner-guard-sample"
+
+var tasks = []string{"runner-guard-run", "runner-guard-update", sampleTask, dockerctl.DesktopTask}
 
 func currentUser() string { return os.Getenv("USERDOMAIN") + `\` + os.Getenv("USERNAME") }
 
@@ -42,6 +44,7 @@ func Install(ctx context.Context, r execx.Runner, bin string) error {
 		// Not elevated on purpose: an elevated Docker Desktop behaves differently.
 		{"schtasks", "/Create", "/F", "/IT", "/RU", user,
 			"/TN", dockerctl.DesktopTask, "/SC", "ONCE", "/ST", "00:00", "/TR", `"` + desktop + `"`},
+		sampleCmd(bin, user),
 	}
 	for _, c := range cmds {
 		if _, err := r.Run(ctx, timeout, c[0], c[1:]...); err != nil {
@@ -59,4 +62,21 @@ func Uninstall(ctx context.Context, r execx.Runner) error {
 		}
 	}
 	return errors.Join(errs...)
+}
+
+// sampleCmd: every 5 minutes, through a headless console so no window
+// flashes up on the desktop.
+func sampleCmd(bin, user string) []string {
+	return []string{"schtasks", "/Create", "/F", "/RL", "HIGHEST", "/IT", "/RU", user,
+		"/TN", sampleTask, "/SC", "MINUTE", "/MO", "5", "/TR", `conhost.exe --headless "` + bin + `" sample`}
+}
+
+// EnsureSample adds the sample task on hosts installed before it existed.
+func EnsureSample(ctx context.Context, r execx.Runner, bin string) (bool, error) {
+	if _, err := r.Run(ctx, timeout, "schtasks", "/Query", "/TN", sampleTask); err == nil {
+		return false, nil
+	}
+	c := sampleCmd(bin, currentUser())
+	_, err := r.Run(ctx, timeout, c[0], c[1:]...)
+	return err == nil, err
 }

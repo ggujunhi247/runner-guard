@@ -24,6 +24,7 @@ import (
 	"github.com/ggujunhi247/runner-guard/internal/runnersvc"
 	"github.com/ggujunhi247/runner-guard/internal/schedule"
 	"github.com/ggujunhi247/runner-guard/internal/state"
+	"github.com/ggujunhi247/runner-guard/internal/tune"
 	"github.com/ggujunhi247/runner-guard/internal/update"
 )
 
@@ -32,6 +33,9 @@ const usage = `usage: runner-guard <command>
   check | status [--json]  show disk, Docker and runner state; change nothing
   run [--force]            prune, repair Docker, block/unblock the runner
   update [--check]         install the latest release (checksum verified)
+  sample                   record one usage sample (scheduled every 5 min)
+  tune [--reset]           show what the daily tune would change; --reset
+                           forgets learned values, ceilings and freezes
   install                  copy binary, write default config, schedule run/update
   uninstall                remove the scheduled tasks (config and logs stay)
   selftest                 check built-in decision logic
@@ -52,6 +56,7 @@ func realMain(args []string) int {
 	asJSON := fs.Bool("json", false, "JSON output (status)")
 	force := fs.Bool("force", false, "prune even below prune_percent (run)")
 	checkOnly := fs.Bool("check", false, "only report whether an update exists (update)")
+	reset := fs.Bool("reset", false, "forget tuning state (tune)")
 	if err := fs.Parse(args[1:]); err != nil {
 		return 2
 	}
@@ -75,6 +80,13 @@ func realMain(args []string) int {
 			if err != nil {
 				return err
 			}
+			if bin := config.BinPath(); fileExists(bin) {
+				if added, err := schedule.EnsureSample(ctx, d.R, bin); err != nil {
+					guard.Logf(w, time.Now(), "warning: sample schedule: %v", err)
+				} else if added {
+					guard.Logf(w, time.Now(), "added the 5-minute sample schedule")
+				}
+			}
 			_, err = guard.Run(ctx, d, *force)
 			if err != nil && !errors.Is(err, state.ErrLocked) && d.Alert != nil {
 				host, _ := os.Hostname()
@@ -84,6 +96,13 @@ func realMain(args []string) int {
 		})
 	case "update":
 		err = withLog(func(w io.Writer) error { return doUpdate(ctx, w, *checkOnly) })
+	case "sample":
+		err = doSample(ctx)
+	case "tune":
+		var d guard.Deps
+		if d, err = deps(os.Stdout); err == nil {
+			err = doTune(d, *reset, os.Stdout)
+		}
 	case "install":
 		err = doInstall(ctx)
 	case "uninstall":
@@ -108,6 +127,7 @@ func deps(log io.Writer) (guard.Deps, error) {
 		R: execx.OS{}, Cfg: cfg,
 		StatePath: statePath(), LockPath: lockPath(),
 		Now: time.Now, Log: log, Sleep: time.Sleep,
+		HistoryPath: historyPath(),
 	}
 	if cfg.AlertWebhook != "" {
 		d.Alert = func(ctx context.Context, msg string) error { return alert.Send(ctx, cfg.AlertWebhook, msg) }
@@ -117,6 +137,67 @@ func deps(log io.Writer) (guard.Deps, error) {
 
 func statePath() string { return filepath.Join(config.Dir(), "state.json") }
 func lockPath() string  { return filepath.Join(config.Dir(), "lock") }
+func historyPath() string {
+	return filepath.Join(config.Dir(), "history.jsonl")
+}
+
+func fileExists(p string) bool { _, err := os.Stat(p); return err == nil }
+
+// doSample takes no lock: it only appends, and run must not delay it.
+func doSample(ctx context.Context) error {
+	cfg, err := config.Load(config.File())
+	if err != nil {
+		return err
+	}
+	st, _ := state.Load(statePath())
+	return tune.Append(historyPath(), tune.Collect(ctx, execx.OS{}, cfg, st, time.Now()))
+}
+
+func doTune(d guard.Deps, reset bool, w io.Writer) error {
+	if reset {
+		unlock, err := state.Lock(d.LockPath, guard.LockStale)
+		if err != nil {
+			return err
+		}
+		defer unlock()
+		st, _ := state.Load(d.StatePath)
+		st.Concurrent, st.WSLMemoryGB, st.WSLSwapGB, st.PrunePercent = state.Knob{}, state.Knob{}, state.Knob{}, state.Knob{}
+		st.LastProposal = ""
+		if err := state.Save(d.StatePath, st); err != nil {
+			return err
+		}
+		fmt.Fprintln(w, "[runner-guard] tuning state cleared; prune_percent is back to the config value")
+		return nil
+	}
+	st, _ := state.Load(d.StatePath)
+	p, err := guard.TunePlan(d, &st, time.Now())
+	if err != nil {
+		return err
+	}
+	mode := "auto (one change per day)"
+	if !d.Cfg.AutoTune || fileExists(guard.KillSwitch(config.Dir())) {
+		mode = "report only (auto_tune false or tune.disabled present)"
+	}
+	fmt.Fprintf(w, "tune mode: %s\nprune_percent in use: %g (config %g)\n", mode, guard.PrunePercent(d, st), d.Cfg.PrunePercent)
+	for _, k := range []struct {
+		name string
+		k    state.Knob
+	}{{tune.Concurrent, st.Concurrent}, {tune.WSLMemory, st.WSLMemoryGB}, {tune.WSLSwap, st.WSLSwapGB}, {tune.Prune, st.PrunePercent}} {
+		if k.k.Value != 0 || k.k.Frozen {
+			fmt.Fprintf(w, "  %s: %g (since %s, ceiling %g, reverts %d, frozen %v)\n", k.name, k.k.Value, k.k.Since.Format(time.RFC3339), k.k.Ceiling, k.k.Reverts, k.k.Frozen)
+		}
+	}
+	for _, n := range p.Notes {
+		fmt.Fprintln(w, "  note:", n)
+	}
+	if len(p.Changes) == 0 {
+		fmt.Fprintln(w, "  no change proposed")
+	}
+	for i, c := range p.Changes {
+		fmt.Fprintf(w, "  proposal %d: %s\n", i+1, c)
+	}
+	return nil
+}
 
 // doUninstall removes the schedule and gives back a runner we stopped;
 // nothing would ever start it again otherwise.
@@ -305,6 +386,10 @@ func doUpdate(ctx context.Context, w io.Writer, checkOnly bool) error {
 	if err := update.Apply(ctx, client, rel, bin, verify); err != nil {
 		return err
 	}
+	// Samples right after an update are not normal load; tuning skips them.
+	st, _ := state.Load(statePath())
+	st.LastUpdate = time.Now()
+	state.Save(statePath(), st)
 	logf("updated %s -> %s", update.Version, rel.Tag)
 	return nil
 }
@@ -394,6 +479,9 @@ func selftest() error {
 	check(err == nil && up, "Newer up")
 	down, err := update.Newer("v0.2.0", "v0.1.9")
 	check(err == nil && !down, "Newer never downgrades")
+	wsl, err := tune.SetWSL(nil, "memory", 8)
+	check(err == nil && string(wsl) == "[wsl2]\nmemory=8GB\n", "SetWSL")
+	check(len(tune.Decide(tune.Input{Now: time.Now(), Cores: 4}).Changes) == 0, "Decide without history changes nothing")
 	if len(fails) > 0 {
 		return fmt.Errorf("selftest failed: %s", strings.Join(fails, ", "))
 	}
