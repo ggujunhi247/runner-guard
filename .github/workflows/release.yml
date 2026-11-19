@@ -85,3 +85,43 @@ jobs:
           after=$(./$asset version | tr -d '\r')
           echo "after: $after"
           test "$after" = "$GITHUB_REF_NAME"
+
+  # What a new host runs: the install script from this commit installs the
+  # release just published; running it again must reinstall in place.
+  install-smoke:
+    needs: publish
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: install twice, check, uninstall (Linux)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          sudo RG_VERSION="$GITHUB_REF_NAME" sh install.sh
+          sudo RG_VERSION="$GITHUB_REF_NAME" sh install.sh
+          test "$(runner-guard version)" = "$GITHUB_REF_NAME"
+          for t in run update sample; do systemctl is-enabled "runner-guard-$t.timer"; done
+          sudo runner-guard tune
+          sudo runner-guard uninstall
+      - name: install twice, check, uninstall (Windows)
+        if: runner.os == 'Windows'
+        shell: powershell
+        run: |
+          $env:RG_VERSION = $env:GITHUB_REF_NAME
+          .\install.ps1
+          .\install.ps1
+          $bin = Join-Path $env:ProgramData 'runner-guard\runner-guard.exe'
+          if ((& $bin version) -ne $env:GITHUB_REF_NAME) { throw 'wrong version installed' }
+          foreach ($t in 'runner-guard-run', 'runner-guard-update', 'runner-guard-sample', 'runner-guard-desktop') {
+            schtasks /Query /TN $t | Out-Null
+            if ($LASTEXITCODE -ne 0) { throw "task $t missing" }
+          }
+          $tr = (schtasks /Query /TN runner-guard-run /V /FO LIST | Select-String 'Task To Run').ToString()
+          if ($tr -notmatch 'conhost.exe --headless') { throw "run task not headless: $tr" }
+          & $bin tune
+          & $bin uninstall
+          if ($LASTEXITCODE -ne 0) { throw 'uninstall failed' }

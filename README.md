@@ -112,9 +112,31 @@ runner-guard는 두 조건을 모두 만족할 때만 직접 조치합니다. �
 
 Windows 러너는 CI 전용 호스트로 보고, 이미지 정리와 디스크 회수를 기본으로 켭니다. Linux는 운영 서비스가 같이 도는 호스트일 수 있어서 이미지를 남깁니다. 지우면 롤백용 이미지가 사라질 수 있기 때문입니다. CI 전용 Linux 호스트라면 설정에서 `prune_images: true`로 켜세요.
 
-## 설치
+## 설치와 관리 (GitHub)
 
-[Releases](https://github.com/ggujunhi247/runner-guard/releases)에서 OS에 맞는 파일을 받습니다.
+설치, 재설치, 버전 고정은 모두 이 저장소의 스크립트 한 줄로 합니다.
+
+- 스크립트는 [Releases](https://github.com/ggujunhi247/runner-guard/releases)에서 바이너리와 `checksums.txt`를 받습니다.
+- SHA256과 `selftest`를 확인한 뒤 `install`을 실행합니다.
+- 설정(`config.json`), 상태, 사용량 기록은 그대로 둡니다.
+- 설치 뒤 업데이트는 매일 자동입니다(`auto_update`).
+- 다시 실행하면 그 자리에서 바이너리와 예약 작업을 새로 씁니다. 실행 중인 `run`이 끝나기를 기다렸다가 바꿉니다.
+
+| 하려는 일 | Linux (root) | Windows (관리자 PowerShell) |
+| --- | --- | --- |
+| 설치·재설치·최신으로 | `curl -fsSL https://raw.githubusercontent.com/ggujunhi247/runner-guard/main/install.sh \| sudo sh` | `irm https://raw.githubusercontent.com/ggujunhi247/runner-guard/main/install.ps1 \| iex` |
+| 특정 버전으로 | `... \| sudo RG_VERSION=v0.6.0 sh` | `$env:RG_VERSION='v0.6.0'` 뒤 같은 줄 |
+| 상태 보기 | `sudo runner-guard status` | `& "$env:ProgramData\runner-guard\runner-guard.exe" status` |
+| 자동 조정 보기 | `sudo runner-guard tune` | `... tune` |
+| 업데이트 확인 | `sudo runner-guard update --check` | `... update --check` |
+| 제거 | `sudo runner-guard uninstall` | `... uninstall` |
+
+- 자동 업데이트를 끄고 버전을 고정하려면, 설정에 `"auto_update": false`를 두고 `RG_VERSION`으로 재설치합니다.
+- 새 버전을 내는 쪽은 `vX.Y.Z` 태그를 push하면 됩니다. [업데이트와 릴리스](#업데이트와-릴리스)를 보세요.
+  - 릴리스 워크플로가 이전 버전의 실제 자동 업데이트를 확인합니다.
+  - 이 스크립트로 두 번 설치하는 것도 Linux·Windows에서 확인합니다.
+
+수동으로 설치하려면 Releases에서 OS에 맞는 파일을 받아 `install`을 실행합니다.
 
 **Linux** (root 필요)
 
@@ -139,7 +161,8 @@ sudo runner-guard status
 - 작업 스케줄러에 작업 네 개가 생깁니다.
   - `runner-guard-run`: 매시간, 첫 실행은 설치 15분 뒤
   - `runner-guard-update`: 매일, run보다 30분 늦게 돌아서 서로 잠금을 다투지 않음
-  - `runner-guard-sample`: 5분마다, `conhost --headless`로 돌아서 창이 뜨지 않음. 이전 버전에서 업데이트한 호스트는 다음 `run`이 추가합니다.
+  - `runner-guard-sample`: 5분마다. 이전 버전에서 업데이트한 호스트는 다음 `run`이 추가합니다.
+  - 세 작업 모두 `conhost --headless`로 돌아서 창이 뜨지 않습니다. v0.6.0 전에 설치한 호스트는 설치 스크립트를 한 번 다시 실행하면 이렇게 바뀝니다.
   - `runner-guard-desktop`: Docker Desktop을 다시 띄우는 보조 작업, 직접 실행되지 않음
 - Docker 데이터 디스크 위치는 Docker Desktop 설정(`CustomWslDistroDir`)에서 자동으로 찾습니다. 못 찾으면 `desktop_vhdx`에 경로를 적으세요.
 - 설치 직후 `status`로 디스크 사용률을 보세요. 러너가 지울 수 없는 데이터(다른 볼륨 등)만으로 `block_percent`를 넘는다면, `desktop_budget_gb`를 늘리지 않는 한 러너가 계속 멈춰 있게 됩니다.

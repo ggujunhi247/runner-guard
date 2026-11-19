@@ -199,3 +199,16 @@ func Apply(ctx context.Context, c *http.Client, rel Release, binPath string, ver
 
 // Cleanup removes the previous binary left by an earlier update.
 func Cleanup(binPath string) { os.Remove(oldPath(binPath)) }
+
+// Replace moves newPath over bin, even while bin is running (Windows
+// cannot overwrite a running exe). install uses it to reinstall in place.
+func Replace(bin, newPath string) error {
+	if _, err := os.Stat(bin); os.IsNotExist(err) {
+		return os.Rename(newPath, bin)
+	}
+	if err := swap(bin, newPath); err != nil {
+		return err
+	}
+	afterSwap(bin)
+	return nil
+}

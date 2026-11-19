@@ -62,24 +62,14 @@ func applyWSL(ctx context.Context, d Deps, st *state.State, key string, gb int, 
 		return err
 	}
 
-	// Recorded before stopping, as decide() does: if this process dies
-	// mid-way, the next run starts the runner again (reason "tune").
+	// If this process dies mid-way, the next run starts the runner again
+	// (reason "tune" lifts like a Docker block).
 	name := d.Cfg.RunnerService
 	running, _, _ := runnersvc.Status(ctx, d.R, name)
 	st.LastDisruptive = now // samples skip the next hour
 	if running {
-		st.BlockedByUs, st.BlockReason, st.BlockedAt = true, runnersvc.ReasonTune, now
-	}
-	if err := state.Save(d.StatePath, *st); err != nil {
-		st.BlockedByUs, st.BlockReason = false, ""
-		return fmt.Errorf("%w: save state: %v", errBusy, err)
-	}
-	if running {
-		if err := runnersvc.Stop(ctx, d.R, name); err != nil {
-			if still, _, serr := runnersvc.Status(ctx, d.R, name); serr == nil && still {
-				st.BlockedByUs, st.BlockReason = false, ""
-				return fmt.Errorf("%w: stop %s: %v", errBusy, name, err)
-			}
+		if err := d.stopRunner(ctx, st, runnersvc.ReasonTune, now); err != nil {
+			return fmt.Errorf("%w: %v", errBusy, err)
 		}
 		defer func() {
 			// On failure the flag stays and the next run starts it.

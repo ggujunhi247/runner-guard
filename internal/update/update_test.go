@@ -153,3 +153,18 @@ func TestApplySwaps(t *testing.T) {
 		t.Fatal("old binary left after Cleanup")
 	}
 }
+
+func TestReplaceInstallsAndReinstalls(t *testing.T) {
+	dir := t.TempDir()
+	bin := filepath.Join(dir, "rg")
+	for _, body := range []string{"one", "two"} {
+		n := bin + ".new"
+		os.WriteFile(n, []byte(body), 0o755)
+		if err := Replace(bin, n); err != nil {
+			t.Fatal(err)
+		}
+		if b, _ := os.ReadFile(bin); string(b) != body {
+			t.Fatalf("got %q want %q", b, body)
+		}
+	}
+}

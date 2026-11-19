@@ -1,6 +1,7 @@
 ---
 title: Every path that stops the runner service must record it in state first
 date: 2026-11-19
+last_updated: 2026-11-19
 category: logic-errors
 module: internal/guard (runner stop paths)
 problem_type: logic_error
@@ -44,5 +45,6 @@ There were two ways to stop the runner. Only one of them followed the rule that 
 
 ## Prevention
 
-- **The rule:** any new code that stops the runner must save `BlockedByUs` and a block reason before the stop, and must give that reason a release rule in `runnersvc.Decide`. A deferred restart alone is not enough.
-- **Better fix, not done yet:** have one helper that saves state and then stops, so this cannot be done two ways. Whoever owns `internal/guard` should make that change; it means changing product code.
+- **One way to stop the runner:** `Deps.stopRunner` in `internal/guard/guard.go` is that way. It saves `BlockedByUs`, the reason and `BlockedAt`, then stops. If the stop fails while the service is still running, it rolls the flag back.
+- **The rule:** stop the runner only through `stopRunner`. Never call `runnersvc.Stop` directly from guard code, and never rely on a deferred restart alone.
+- **A new block reason** needs a release rule in `runnersvc.Decide`.

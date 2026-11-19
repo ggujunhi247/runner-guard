@@ -38,9 +38,9 @@ func Install(ctx context.Context, r execx.Runner, bin string) error {
 		{"icacls", dir, "/inheritance:r", "/grant:r",
 			"*S-1-5-32-544:(OI)(CI)F", "*S-1-5-18:(OI)(CI)F", "*S-1-5-32-545:(OI)(CI)RX"},
 		{"schtasks", "/Create", "/F", "/RL", "HIGHEST", "/IT", "/RU", user,
-			"/TN", "runner-guard-run", "/SC", "HOURLY", "/ST", runAt, "/TR", `"` + bin + `" run`},
+			"/TN", "runner-guard-run", "/SC", "HOURLY", "/ST", runAt, "/TR", headless(bin, "run")},
 		{"schtasks", "/Create", "/F", "/RL", "HIGHEST", "/IT", "/RU", user,
-			"/TN", "runner-guard-update", "/SC", "DAILY", "/ST", updateAt, "/TR", `"` + bin + `" update`},
+			"/TN", "runner-guard-update", "/SC", "DAILY", "/ST", updateAt, "/TR", headless(bin, "update")},
 		// Not elevated on purpose: an elevated Docker Desktop behaves differently.
 		{"schtasks", "/Create", "/F", "/IT", "/RU", user,
 			"/TN", dockerctl.DesktopTask, "/SC", "ONCE", "/ST", "00:00", "/TR", `"` + desktop + `"`},
@@ -64,11 +64,14 @@ func Uninstall(ctx context.Context, r execx.Runner) error {
 	return errors.Join(errs...)
 }
 
-// sampleCmd: every 5 minutes, through a headless console so no window
-// flashes up on the desktop.
+// headless runs the console exe without a window flashing up on the
+// logged-on user's desktop.
+func headless(bin, cmd string) string { return `conhost.exe --headless "` + bin + `" ` + cmd }
+
+// sampleCmd: every 5 minutes.
 func sampleCmd(bin, user string) []string {
 	return []string{"schtasks", "/Create", "/F", "/RL", "HIGHEST", "/IT", "/RU", user,
-		"/TN", sampleTask, "/SC", "MINUTE", "/MO", "5", "/TR", `conhost.exe --headless "` + bin + `" sample`}
+		"/TN", sampleTask, "/SC", "MINUTE", "/MO", "5", "/TR", headless(bin, "sample")}
 }
 
 // EnsureSample adds the sample task on hosts installed before it existed.

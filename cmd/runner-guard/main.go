@@ -405,6 +405,12 @@ func doInstall(ctx context.Context) error {
 			return fmt.Errorf("%w (run as root/administrator)", err)
 		}
 	}
+	// A reinstall must not swap the binary or rewrite tasks under a running run.
+	unlock, err := waitLock(ctx, 30*time.Minute)
+	if err != nil {
+		return err
+	}
+	defer unlock()
 	if !samePath(src, bin) {
 		if err := copyFile(src, bin); err != nil {
 			return err
@@ -430,7 +436,7 @@ func samePath(a, b string) bool {
 	return err1 == nil && err2 == nil && os.SameFile(ai, bi)
 }
 
-// copyFile writes dst via a temp file and rename so a half copy never runs.
+// copyFile writes dst via a temp file and a swap so a half copy never runs.
 func copyFile(src, dst string) error {
 	in, err := os.Open(src)
 	if err != nil {
@@ -446,11 +452,13 @@ func copyFile(src, dst string) error {
 	if cerr := out.Close(); err == nil {
 		err = cerr
 	}
+	if err == nil {
+		err = update.Replace(dst, tmp) // dst may be running: reinstall in place
+	}
 	if err != nil {
 		os.Remove(tmp)
-		return err
 	}
-	return os.Rename(tmp, dst)
+	return err
 }
 
 // selftest checks the pure decision logic; update runs it on a new binary

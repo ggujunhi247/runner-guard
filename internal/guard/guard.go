@@ -260,21 +260,9 @@ func Run(ctx context.Context, d Deps, force bool) (Report, error) {
 			if !rep.DockerHealthy {
 				reason = runnersvc.ReasonDocker
 			}
-			// Record before stopping: a crash or failed save after the stop
-			// must not leave a stopped runner nobody will restart.
-			st.BlockedByUs, st.BlockReason, st.BlockedAt = true, reason, now
-			if err := state.Save(d.StatePath, st); err != nil {
-				st.BlockedByUs, st.BlockReason = false, ""
-				warn("save state before stopping %s: %v; not stopping", name, err)
+			if err := d.stopRunner(ctx, &st, reason, now); err != nil {
+				warn("%v", err)
 				return
-			}
-			if err := runnersvc.Stop(ctx, d.R, name); err != nil {
-				warn("stop %s: %v", name, err)
-				// A slow stop may still finish; keep the flag unless it is still running.
-				if still, _, serr := runnersvc.Status(ctx, d.R, name); serr == nil && still {
-					st.BlockedByUs, st.BlockReason = false, ""
-					return
-				}
 			}
 			running = false
 			did = append(did, fmt.Sprintf("stopped %s (%s: docker healthy=%v, disk %.1f%%)", name, reason, rep.DockerHealthy, rep.Pct))
@@ -451,4 +439,26 @@ func notable(did []string) []string {
 		}
 	}
 	return n
+}
+
+// stopRunner is the only way runner-guard stops the runner. It records the
+// block first, so a crash, a failed save or a failed start afterwards never
+// leaves a stopped runner that no run will start again. Every reason needs a
+// release rule in runnersvc.Decide. An error means the runner still runs.
+func (d Deps) stopRunner(ctx context.Context, st *state.State, reason string, now time.Time) error {
+	name := d.Cfg.RunnerService
+	st.BlockedByUs, st.BlockReason, st.BlockedAt = true, reason, now
+	if err := state.Save(d.StatePath, *st); err != nil {
+		st.BlockedByUs, st.BlockReason = false, ""
+		return fmt.Errorf("save state before stopping %s: %v; not stopping", name, err)
+	}
+	if err := runnersvc.Stop(ctx, d.R, name); err != nil {
+		// A slow stop may still finish; keep the flag unless it is still running.
+		if still, _, serr := runnersvc.Status(ctx, d.R, name); serr == nil && still {
+			st.BlockedByUs, st.BlockReason = false, ""
+			state.Save(d.StatePath, *st)
+			return fmt.Errorf("stop %s: %v", name, err)
+		}
+	}
+	return nil
 }
