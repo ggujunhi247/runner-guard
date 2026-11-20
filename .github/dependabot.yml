@@ -6,6 +6,10 @@ updates:
     directory: /
     schedule:
       interval: weekly
+    # A hijacked action release is usually caught within days; wait before
+    # proposing it, since non-major updates merge themselves.
+    cooldown:
+      default-days: 7
     groups:
       actions:
         patterns: ["*"]

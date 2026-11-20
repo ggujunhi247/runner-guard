@@ -221,7 +221,7 @@ runner-guard selftest | version
 | `runner_config` | Linux `"/etc/gitlab-runner/config.toml"`, Windows `"C:\\GitLab-Runner\\config.toml"` | `concurrent`를 읽고 바꿀 gitlab-runner 설정 파일. 이 파일이 없으면 서비스 명령줄(`--config`, `--working-directory`)에서 실제 경로를 찾아 씁니다 |
 | `reboot_recover` | Linux `false`, Windows `true` | Docker가 재시작으로도 살아나지 않을 때 재부팅으로 복구할지. 운영 컨테이너가 있는 Linux 호스트는 끈 채로 두세요 |
 
-웹훅 URL은 비밀입니다. 호스트의 설정 파일에만 두고 저장소에 올리지 마세요.
+웹훅 URL은 비밀입니다. 호스트의 설정 파일에만 두고 저장소에 올리지 마세요. 설정 파일은 root·Administrators만 읽을 수 있게 잠깁니다(설치할 때와 매시간 `run`). 그래서 `status`, `tune`도 sudo나 관리자 셸에서 실행합니다.
 
 상태와 로그 위치: Linux는 `/var/lib/runner-guard/`, Windows는 `%ProgramData%\runner-guard\`입니다(`state.json`, `runner-guard.log`, `history.jsonl`). 로그가 1MB를 넘으면 `runner-guard.log.1`로 한 번 회전합니다. Linux에서는 journald에도 남습니다(`journalctl -u runner-guard-run`).
 
@@ -236,12 +236,13 @@ gh pr create --fill          # 저장소 주인의 PR은 자동 머지가 켜짐
 ```
 
 - **머지 조건** (`main` ruleset):
-  - `test (ubuntu-latest)`, `test (windows-latest)`, `leak-scan`이 통과해야 합니다. 승인은 필요 없습니다.
+  - `test (ubuntu-latest)`, `test (windows-latest)`, `leak-scan`, `gitleaks`가 통과해야 합니다. 승인은 필요 없습니다.
+  - `gitleaks`는 전체 커밋 기록과 파일에서 토큰·키를 찾습니다. 로컬에서는 pre-commit 훅이 같은 검사를 커밋 전에 합니다.
   - rebase 머지만 됩니다. 커밋마다 작성자(noreply 주소)가 그대로 남고, 기록이 한 줄로 이어집니다.
   - 머지된 브랜치는 지워집니다.
 - **자동 머지 대상** (`.github/workflows/automerge.yml`):
   - 저장소 주인이 이 저장소 브랜치에서 연 PR. draft이거나 `no-automerge` 라벨이 있으면 제외합니다.
-  - Dependabot의 Actions 업데이트(매주 한 PR로 묶음). major 버전은 사람이 보도록 댓글만 남깁니다.
+  - Dependabot의 Actions 업데이트(매주 한 PR로 묶음). 새 버전이 나온 지 7일이 지나야 제안합니다. 탈취된 릴리스가 보통 그 안에 드러나기 때문입니다. major 버전은 사람이 보도록 댓글만 남깁니다.
 - 자동 머지를 멈추려면 PR에 `no-automerge` 라벨을 붙이거나 `gh pr merge --disable-auto`를 실행합니다.
 - 릴리스는 자동이 아닙니다. 머지 뒤 `main`에서 태그를 push합니다(아래).
 

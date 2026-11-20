@@ -32,6 +32,7 @@ Set-ExecutionPolicy -Scope Process Bypass
 | 자동 조정 보기 / 배운 값 지우기 | `tune` / `tune-reset` |
 | 자동 조정 끄기(제안만) / 켜기 | `tune-off` / `tune-on` |
 | 점검 중 잠시 멈추기 / 다시 켜기 | `pause` / `resume` |
+| 러너 폴더(토큰)를 관리자만 쓰게 잠그기 | `secure-runner` |
 | 업데이트 확인 / 지금 업데이트 | `check-update` / `update` |
 | 제거 | `uninstall` |
 
@@ -72,6 +73,7 @@ powercfg /hibernate off
   ```
 - 러너 서비스 이름이 `gitlab-runner`가 아니면 2-2에서 `runner_service`를 바꿉니다.
 - 러너 설정 파일(`config.toml`)은 `C:\GitLab-Runner\config.toml`에 없어도 서비스 명령줄에서 찾습니다.
+- **러너 폴더를 잠그세요.** `C:\` 바로 아래에 만든 폴더는 기본으로 모든 사용자가 고칠 수 있습니다. 그러면 누구나 러너 토큰(`config.toml`)을 읽고 `gitlab-runner.exe`를 바꿔치기할 수 있습니다. `.\rg-windows.ps1 preflight`가 이를 확인하고, `.\rg-windows.ps1 secure-runner`가 Administrators·SYSTEM(그리고 서비스 계정)만 쓰게 바꿉니다.
 
 ## 2. 설치 (관리자 PowerShell)
 
@@ -122,6 +124,7 @@ $rg = "$env:ProgramData\runner-guard\runner-guard.exe"
 schtasks /Query /TN runner-guard-run /V /FO LIST | Select-String 'Run As User|Status|Next Run'
 ```
 
+- 설치는 `%ProgramData%\runner-guard`의 소유자를 Administrators로 바꾸고, 관리자와 SYSTEM만 쓸 수 있게 합니다. `config.json`(웹훅 URL)은 관리자만 읽을 수 있습니다. 그래서 `status`, `tune`, `config`도 관리자 PowerShell에서 실행합니다.
 - `status` 끝에 `PROBLEM:` 줄이 없어야 합니다. 있으면 그 줄이 시키는 대로 고칩니다. [문제 해결](#4-문제-해결)도 보세요.
 - "Run As User"가 Docker Desktop을 쓰는 사용자여야 합니다.
 - 바로 한 번 돌려 보려면 `& $rg run`을 실행합니다. 매시간 하는 일을 지금 한 번 합니다. 디스크가 기준 미만이면 아무것도 지우지 않습니다.

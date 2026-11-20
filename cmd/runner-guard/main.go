@@ -86,6 +86,12 @@ func realMain(args []string) int {
 			if err != nil {
 				return err
 			}
+			// Hosts that only ever auto-updated still get the config locked.
+			if fileExists(config.File()) {
+				if err := schedule.LockFile(ctx, d.R, config.File()); err != nil {
+					guard.Logf(w, time.Now(), "warning: lock %s: %v", config.File(), err)
+				}
+			}
 			if bin := config.BinPath(); fileExists(bin) {
 				if added, err := schedule.EnsureSample(ctx, d.R, bin); err != nil {
 					guard.Logf(w, time.Now(), "warning: sample schedule: %v", err)
@@ -381,6 +387,9 @@ func runStatus(ctx context.Context, d guard.Deps, asJSON bool, w io.Writer) erro
 func doUpdate(ctx context.Context, w io.Writer, checkOnly bool) error {
 	logf := func(format string, a ...any) { guard.Logf(w, time.Now(), format, a...) }
 	cfg, err := config.Load(config.File())
+	if errors.Is(err, os.ErrPermission) && checkOnly {
+		cfg, err = config.Default(), nil // a non-root check only needs the default repo
+	}
 	if err != nil {
 		return err
 	}
@@ -461,6 +470,10 @@ func doInstall(ctx context.Context) error {
 		if err := os.MkdirAll(dir, 0o755); err != nil {
 			return fmt.Errorf("%w (run as root/administrator)", err)
 		}
+		// Before writing anything there: see schedule.SecureDir.
+		if err := schedule.SecureDir(ctx, execx.OS{}, dir); err != nil {
+			return fmt.Errorf("secure %s: %w", dir, err)
+		}
 	}
 	// A reinstall must not swap the binary or rewrite tasks under a running run.
 	unlock, err := waitLock(ctx, 30*time.Minute)
@@ -475,9 +488,12 @@ func doInstall(ctx context.Context) error {
 	}
 	if _, err := os.Stat(config.File()); os.IsNotExist(err) {
 		b, _ := json.MarshalIndent(config.Default(), "", "  ")
-		if err := os.WriteFile(config.File(), append(b, '\n'), 0o644); err != nil {
+		if err := os.WriteFile(config.File(), append(b, '\n'), 0o600); err != nil {
 			return err
 		}
+	}
+	if err := schedule.LockFile(ctx, execx.OS{}, config.File()); err != nil { // webhook URL is a secret
+		return fmt.Errorf("lock %s: %w", config.File(), err)
 	}
 	if err := schedule.Install(ctx, execx.OS{}, bin); err != nil {
 		return err
@@ -501,7 +517,8 @@ func copyFile(src, dst string) error {
 	}
 	defer in.Close()
 	tmp := dst + ".new"
-	out, err := os.OpenFile(tmp, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o755)
+	os.Remove(tmp) // never reuse a file someone else created (and may still own)
+	out, err := os.OpenFile(tmp, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o755)
 	if err != nil {
 		return err
 	}

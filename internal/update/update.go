@@ -159,7 +159,8 @@ func Apply(ctx context.Context, c *http.Client, rel Release, binPath string, ver
 	}
 
 	newPath := binPath + ".new"
-	f, err := os.OpenFile(newPath, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o755)
+	os.Remove(newPath) // never reuse a file someone else created (and may still own)
+	f, err := os.OpenFile(newPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o755)
 	if err != nil {
 		return err
 	}

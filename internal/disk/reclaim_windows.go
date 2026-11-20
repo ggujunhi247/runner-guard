@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strings"
 	"syscall"
 	"time"
 
@@ -22,6 +23,9 @@ const compactTimeout = 90 * time.Minute
 // (as the logged-on user, not elevated). An empty result means nothing done.
 func Reclaim(ctx context.Context, r execx.Runner, cfg config.Config, relaunch func() error) (string, error) {
 	vhdx := VHDXPath(cfg)
+	if strings.ContainsAny(vhdx, "\"\r\n") { // it is pasted into a diskpart script
+		return "", fmt.Errorf("refusing data disk path with a quote or newline: %q", vhdx)
+	}
 	fi, err := os.Stat(vhdx)
 	if err != nil {
 		return "", fmt.Errorf("docker data disk not found (set desktop_vhdx): %w", err)

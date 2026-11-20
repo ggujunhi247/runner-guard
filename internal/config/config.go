@@ -60,6 +60,9 @@ func Load(path string) (Config, error) {
 	if errors.Is(err, os.ErrNotExist) {
 		return c, nil
 	}
+	if errors.Is(err, os.ErrPermission) {
+		return c, fmt.Errorf("%w: %s is readable by root/Administrators only (it holds the webhook URL); use sudo or an elevated shell", os.ErrPermission, path)
+	}
 	if err != nil {
 		return c, err
 	}
