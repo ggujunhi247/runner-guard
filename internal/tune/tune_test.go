@@ -256,3 +256,21 @@ func TestSkipAfterDockerRestart(t *testing.T) {
 		t.Fatalf("%q", r)
 	}
 }
+
+// Our own change must not look like a hand edit: what Record keeps has to
+// equal what applyChange writes (int GB), even from an odd MB setting.
+func TestOwnWSLChangeIsNotAHandEdit(t *testing.T) {
+	h := hist(15, func(i int, s *Sample) {
+		s.MemTotalMB, s.MemAvailMB = 7800, 300
+		s.HostMemMB, s.HostMemPct = 32768, 60
+		s.JobMemMB = []float64{1000, 1000}
+	})
+	x := in(h, state.State{})
+	x.Windows, x.WSLMemGB = true, WSLValue([]byte("[wsl2]\nmemory=8000MB\n"), "memory")
+	c := only(t, Decide(x), WSLMemory)
+	var k state.Knob
+	Record(&k, c, t0)
+	if SyncKnob(&k, float64(int(c.To))) {
+		t.Fatalf("recorded %v but wrote %d", c.To, int(c.To))
+	}
+}
