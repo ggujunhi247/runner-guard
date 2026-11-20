@@ -42,12 +42,19 @@ func Lock(path string, stale time.Duration) (unlock func(), err error) {
 		if err != nil {
 			continue // removed meanwhile; try again
 		}
-		if time.Since(fi.ModTime()) < stale {
+		// A crashed or rebooted run leaves its lock behind; don't wait out stale
+		// when its process is gone. A reused PID just falls back to the age.
+		var pid int
+		if b, err := os.ReadFile(path); err == nil {
+			fmt.Sscan(string(b), &pid)
+		}
+		if time.Since(fi.ModTime()) < stale && (pid <= 0 || alive(pid)) {
 			return nil, ErrLocked
 		}
 		// Rename, not remove: of several contenders only one moves the stale file.
 		// ponytail: a contender that stat'ed the stale file can still rename a
-		// fresh lock in the microseconds after takeover; needs runs >2h to matter.
+		// fresh lock in the microseconds after takeover; needs two runs starting
+		// together right after a crash. A rename-based lock would close it.
 		grave := fmt.Sprintf("%s.stale.%d", path, os.Getpid())
 		if os.Rename(path, grave) == nil {
 			os.Remove(grave)

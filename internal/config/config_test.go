@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 )
@@ -67,5 +68,17 @@ func TestClampPruneAboveBlock(t *testing.T) {
 	c.PrunePercent = 90
 	if w := c.Clamp(); w == "" || c.PrunePercent != 80 {
 		t.Fatal(c.PrunePercent, w)
+	}
+}
+
+func TestLoadAcceptsBOM(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "c.json")
+	os.WriteFile(p, []byte("\xEF\xBB\xBF{\"block_percent\": 80}"), 0o644)
+	if c, err := Load(p); err != nil || c.BlockPercent != 80 {
+		t.Fatalf("%v %v", c.BlockPercent, err)
+	}
+	os.WriteFile(p, []byte{0xFF, 0xFE, '{', 0, '}', 0}, 0o644)
+	if _, err := Load(p); err == nil || !strings.Contains(err.Error(), "UTF-16") {
+		t.Fatalf("%v", err)
 	}
 }

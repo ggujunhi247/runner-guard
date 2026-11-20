@@ -70,6 +70,10 @@ type Input struct {
 	Now     time.Time
 	Cores   int
 	Windows bool
+	// Current settings read from the files; 0 = unknown. MemTotal inside the VM
+	// is ~2% below .wslconfig's memory=, so rounding it drifts (32GB reads 31).
+	Concurrent          int
+	WSLMemGB, WSLSwapGB float64
 }
 
 // Decide is pure: history and state in, proposed changes out.
@@ -136,6 +140,16 @@ func quietSince(st state.State, now time.Time) bool {
 		}
 	}
 	return true
+}
+
+func lastChange(st state.State) time.Time {
+	var t time.Time
+	for _, k := range []state.Knob{st.Concurrent, st.WSLMemoryGB, st.WSLSwapGB, st.PrunePercent} {
+		if k.Since.After(t) {
+			t = k.Since
+		}
+	}
+	return t
 }
 
 func after(h []Sample, t time.Time) []Sample {
@@ -208,7 +222,10 @@ func decideConcurrent(in Input, h []Sample, quiet bool) (*Change, string) {
 	if len(h) == 0 {
 		return nil, ""
 	}
-	cur := h[len(h)-1].Concurrent
+	cur := in.Concurrent // read from config.toml now; samples can be hours old
+	if cur <= 0 {
+		cur = h[len(h)-1].Concurrent
+	}
 	if cur <= 0 {
 		return nil, "concurrent: runner config unreadable (" + in.Cfg.RunnerConfig + ")"
 	}
@@ -287,6 +304,9 @@ func decideWSL(in Input, h []Sample, quiet bool) []Change {
 	}
 	last := week[len(week)-1]
 	curMem := math.Round(last.MemTotalMB / 1024)
+	if in.WSLMemGB > 0 {
+		curMem = math.Round(in.WSLMemGB) // whole GB, as written; else our own write looks like a hand edit
+	}
 	hostGB := last.HostMemMB / 1024
 	var out []Change
 	km, ks := in.State.WSLMemoryGB, in.State.WSLSwapGB
@@ -304,7 +324,8 @@ func decideWSL(in Input, h []Sample, quiet bool) []Change {
 	if ok, _ := gate(after(h, km.Since), km.Since, in.Now, span, FirstJobHours/2); !ok {
 		return nil
 	}
-	why := stress(week)
+	// Stress from before the last change of any knob may already be fixed.
+	why := stress(after(week, lastChange(in.State)))
 	host := hostP95(week)
 	var used []float64
 	for _, s := range week {
@@ -314,7 +335,7 @@ func decideWSL(in Input, h []Sample, quiet bool) []Change {
 	case why != "" && !km.Frozen && host < 80 && curMem+WSLStepGB <= hostGB-HostKeepGB &&
 		(km.Ceiling == 0 || curMem+WSLStepGB < km.Ceiling) && quiet:
 		out = append(out, Change{Knob: WSLMemory, From: curMem, To: curMem + WSLStepGB, Why: why})
-	case why == "" && host >= 85 && percentile(used, 99)+WSLStepGB+2 < curMem && curMem-WSLStepGB >= WSLMinGB:
+	case why == "" && quiet && host >= 85 && percentile(used, 99)+WSLStepGB+2 < curMem && curMem-WSLStepGB >= WSLMinGB:
 		out = append(out, Change{Knob: WSLMemory, From: curMem, To: curMem - WSLStepGB, Why: fmt.Sprintf("host memory p95 %.0f%%; the VM never used %.0fGB", host, curMem-WSLStepGB)})
 	}
 	// Swap only grows, and only after OOM kills with swap nearly used up.
@@ -325,6 +346,9 @@ func decideWSL(in Input, h []Sample, quiet bool) []Change {
 		}
 	}
 	curSwap := math.Round(last.SwapMB / 1024)
+	if in.WSLSwapGB > 0 {
+		curSwap = math.Round(in.WSLSwapGB)
+	}
 	if oomFull && !ks.Frozen && quiet && curSwap+WSLStepGB <= 16 {
 		out = append(out, Change{Knob: WSLSwap, From: curSwap, To: curSwap + WSLStepGB, Why: "OOM kills with swap nearly full"})
 	}
@@ -401,10 +425,17 @@ func SyncKnob(k *state.Knob, actual float64) bool {
 
 // Record updates the knob after c was applied at now.
 func Record(k *state.Knob, c Change, now time.Time) {
+	if k.Value == 0 && k.Base == 0 {
+		k.Base = c.From // first change: for prune this is the config value
+	}
 	if c.Revert {
 		k.Ceiling = c.From // the raised value failed
 		k.Reverts++
 		k.Frozen = k.Reverts >= 2
+	} else if k.Raised && k.Value == c.From && c.To < c.From && (k.Ceiling == 0 || c.From < k.Ceiling) {
+		// Lowering a value we raised, even after Watch: don't raise into it again
+		// next week (a weekly heavy pipeline would otherwise oscillate forever).
+		k.Ceiling = c.From
 	}
 	k.Prev, k.Value, k.Since, k.Raised = c.From, c.To, now, c.To > c.From
 }

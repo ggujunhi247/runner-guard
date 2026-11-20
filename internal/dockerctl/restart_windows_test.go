@@ -36,3 +36,12 @@ func TestRestartWindowsFallback(t *testing.T) {
 		t.Fatalf("calls %v", f.Calls)
 	}
 }
+
+func TestRestartWindowsLaunchesWhenDesktopRestartFails(t *testing.T) {
+	f := &execx.Fake{Responses: map[string]execx.FakeResponse{
+		"docker desktop restart": {Err: errors.New("Docker Desktop is not running")},
+	}}
+	if err := Restart(context.Background(), f); err != nil || f.Calls[len(f.Calls)-1][0] != "schtasks" {
+		t.Fatalf("%v %v", err, f.Calls)
+	}
+}

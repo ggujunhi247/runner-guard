@@ -17,6 +17,11 @@ import (
 
 // restartVM restarts the WSL VM and Docker Desktop and waits up to 10 min.
 func restartVM(ctx context.Context, d Deps) error {
+	// Stop Desktop first, as Reclaim does: killing the VM under a running
+	// Desktop leaves it on an error dialog that a relaunch does not clear.
+	if _, err := d.R.Run(ctx, 3*time.Minute, "docker", "desktop", "stop"); err != nil {
+		d.R.Run(ctx, time.Minute, "taskkill", "/F", "/IM", "Docker Desktop.exe")
+	}
 	if _, err := d.R.Run(ctx, 3*time.Minute, "wsl", "--shutdown"); err != nil {
 		return fmt.Errorf("wsl --shutdown: %w", err)
 	}
@@ -65,14 +70,21 @@ func applyWSL(ctx context.Context, d Deps, st *state.State, key string, gb int, 
 	// If this process dies mid-way, the next run starts the runner again
 	// (reason "tune" lifts like a Docker block).
 	name := d.Cfg.RunnerService
-	running, _, _ := runnersvc.Status(ctx, d.R, name)
+	running, _, err := runnersvc.Status(ctx, d.R, name)
+	if err != nil {
+		return fmt.Errorf("%w: runner status unknown: %v", errBusy, err) // can't be sure no job starts
+	}
 	st.LastDisruptive = now // samples skip the next hour
 	if running {
 		if err := d.stopRunner(ctx, st, runnersvc.ReasonTune, now); err != nil {
 			return fmt.Errorf("%w: %v", errBusy, err)
 		}
 		defer func() {
-			// On failure the flag stays and the next run starts it.
+			// With Docker dead the runner would only fail jobs; the flag stays
+			// and the next run starts it once Docker answers.
+			if !dockerctl.Healthy(ctx, d.R) {
+				return
+			}
 			if err := runnersvc.Start(ctx, d.R, name); err == nil {
 				st.BlockedByUs, st.BlockReason = false, ""
 			}

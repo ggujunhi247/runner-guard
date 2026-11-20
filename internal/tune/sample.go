@@ -71,7 +71,9 @@ func SkipReason(st state.State, now time.Time, dockerOK, runnerOK bool) string {
 		return "docker"
 	case !runnerOK:
 		return "runner-stopped"
-	case now.Sub(st.LastReclaim) < time.Hour, now.Sub(st.LastDisruptive) < time.Hour:
+	case now.Sub(st.LastReclaim) < time.Hour, now.Sub(st.LastDisruptive) < time.Hour,
+		now.Sub(st.LastWSLRecover) < time.Hour, now.Sub(st.LastReboot) < time.Hour,
+		len(st.DockerRestarts) > 0 && now.Sub(st.DockerRestarts[len(st.DockerRestarts)-1]) < time.Hour:
 		return "restart"
 	case now.Sub(st.LastUpdate) < 48*time.Hour:
 		return "update"
@@ -271,5 +273,11 @@ func Rewrite(path string, h []Sample) error {
 	if err := os.WriteFile(tmp, buf.Bytes(), 0o644); err != nil {
 		return err
 	}
-	return os.Rename(tmp, path)
+	// Windows refuses to replace a file another process (sample) has open.
+	err := os.Rename(tmp, path)
+	for i := 0; err != nil && i < 5; i++ {
+		time.Sleep(time.Second)
+		err = os.Rename(tmp, path)
+	}
+	return err
 }

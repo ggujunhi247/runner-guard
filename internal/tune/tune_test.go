@@ -224,3 +224,35 @@ func TestMissingMemoryReadIsNotStress(t *testing.T) {
 		}
 	}
 }
+
+func TestLateLoweringOfARaiseSetsCeiling(t *testing.T) {
+	k := state.Knob{Value: 4, Prev: 3, Raised: true, Since: t0.Add(-5 * 24 * time.Hour)}
+	Record(&k, Change{Knob: Concurrent, From: 4, To: 3, Why: "OOM"}, t0)
+	if k.Ceiling != 4 || k.Reverts != 0 || k.Frozen {
+		t.Fatalf("%+v", k)
+	}
+}
+
+func TestWSLUsesConfiguredValue(t *testing.T) {
+	cfg := []byte("\xEF\xBB\xBF[wsl2]\nmemory = 32GB\nswap=512MB\n[experimental]\nmemory=1GB\n")
+	if m, s := WSLValue(cfg, "memory"), WSLValue(cfg, "swap"); m != 32 || s != 0.5 {
+		t.Fatalf("memory %v swap %v", m, s)
+	}
+	h := hist(15, func(i int, s *Sample) {
+		s.MemTotalMB, s.MemAvailMB = 31.25*1024, 300 // what a 32GB VM reports
+		s.HostMemMB, s.HostMemPct = 65536, 60
+		s.JobMemMB = []float64{1000, 1000}
+	})
+	x := in(h, state.State{})
+	x.Windows, x.WSLMemGB = true, 32
+	if c := only(t, Decide(x), WSLMemory); c.From != 32 || c.To != 34 {
+		t.Fatalf("%+v", c)
+	}
+}
+
+func TestSkipAfterDockerRestart(t *testing.T) {
+	st := state.State{DockerRestarts: []time.Time{t0.Add(-30 * time.Minute)}}
+	if r := SkipReason(st, t0, true, true); r != "restart" {
+		t.Fatalf("%q", r)
+	}
+}

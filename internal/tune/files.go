@@ -83,6 +83,28 @@ func writeIfUnchanged(path string, orig, data []byte) error {
 
 var wslKeyRe = regexp.MustCompile(`^\s*(memory|swap)\s*=`)
 
+var wslValRe = regexp.MustCompile(`(?i)^\s*(memory|swap)\s*=\s*(\d+(?:\.\d+)?)\s*(GB|MB)\s*$`)
+
+// WSLValue returns key's value in GB under [wsl2], or 0 when unset or unreadable.
+func WSLValue(text []byte, key string) float64 {
+	section := ""
+	for _, l := range lines(bytes.TrimPrefix(text, []byte{0xEF, 0xBB, 0xBF})) {
+		t := strings.TrimSpace(l)
+		if strings.HasPrefix(t, "[") {
+			section = strings.ToLower(t)
+			continue
+		}
+		if m := wslValRe.FindStringSubmatch(t); section == "[wsl2]" && m != nil && strings.EqualFold(m[1], key) {
+			v, _ := strconv.ParseFloat(m[2], 64)
+			if strings.EqualFold(m[3], "MB") {
+				v /= 1024
+			}
+			return v
+		}
+	}
+	return 0
+}
+
 // SetWSL returns .wslconfig text with key (memory or swap) set to gb under
 // [wsl2], keeping every other line. It refuses UTF-16 files (PowerShell 5
 // writes those) rather than appending ASCII to them; a UTF-8 BOM is dropped.

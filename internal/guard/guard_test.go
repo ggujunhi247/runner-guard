@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -173,7 +174,7 @@ func TestMissingServiceWarnsAndContinues(t *testing.T) {
 func TestLockHeldReturnsErrLocked(t *testing.T) {
 	f := &execx.Fake{Responses: responses(true, svcRunning)}
 	d := newDeps(t, f, 50)
-	os.WriteFile(d.LockPath, []byte("1"), 0o644)
+	os.WriteFile(d.LockPath, []byte(fmt.Sprint(os.Getpid())) /* a live holder */, 0o644)
 	if _, err := Run(context.Background(), d, false); !errors.Is(err, state.ErrLocked) {
 		t.Fatalf("got %v", err)
 	}
@@ -517,5 +518,46 @@ func TestRecoveryRebootGetsFreshRestarts(t *testing.T) {
 		DockerRestarts: []time.Time{now.Add(-time.Hour), now.Add(-2 * time.Hour), now.Add(-3 * time.Hour)}})
 	if rep, _ := Run(context.Background(), d, false); !rep.Restarted {
 		t.Fatalf("no restart after the reboot: %v", f.Calls)
+	}
+}
+
+func TestFrozenKnobStillLowers(t *testing.T) {
+	f := &execx.Fake{Responses: responses(true, svcRunning)}
+	d := newDeps(t, f, 50)
+	d.HistoryPath = filepath.Join(filepath.Dir(d.StatePath), "history.jsonl")
+	writeHistory(t, d.HistoryPath, runtime.NumCPU()+2)
+	state.Save(d.StatePath, state.State{Concurrent: state.Knob{Frozen: true, Reverts: 2}})
+	var applied []tune.Change
+	d.Apply = func(_ context.Context, c tune.Change) error { applied = append(applied, c); return nil }
+	Run(context.Background(), d, false)
+	if len(applied) != 1 || applied[0].To >= applied[0].From {
+		t.Fatalf("a frozen knob must still be lowered: %+v", applied)
+	}
+}
+
+func TestTunePlanReadsConfigAndSeesHandEdits(t *testing.T) {
+	f := &execx.Fake{Responses: responses(true, svcRunning)}
+	d := newDeps(t, f, 50)
+	d.HistoryPath = filepath.Join(filepath.Dir(d.StatePath), "history.jsonl")
+	writeHistory(t, d.HistoryPath, 4) // samples still say 4
+	d.Cfg.RunnerConfig = filepath.Join(filepath.Dir(d.StatePath), "config.toml")
+	os.WriteFile(d.Cfg.RunnerConfig, []byte("concurrent = 2\n"), 0o600)
+	d.Cfg.PrunePercent = 85
+	st := state.State{Concurrent: state.Knob{Value: 4, Raised: true, Since: now.Add(-10 * 24 * time.Hour)},
+		PrunePercent: state.Knob{Value: 74, Base: 80, Since: now.Add(-48 * time.Hour)}}
+	p, err := TunePlan(d, &st, now)
+	if err != nil || st.Concurrent.Value != 0 || st.PrunePercent.Value != 0 || len(p.Notes) < 2 {
+		t.Fatalf("hand edits not picked up: %v %+v %v", err, st, p.Notes)
+	}
+}
+
+func TestOldPruneKnobIsKept(t *testing.T) {
+	d := newDeps(t, &execx.Fake{Responses: responses(true, svcRunning)}, 50)
+	d.HistoryPath = filepath.Join(filepath.Dir(d.StatePath), "history.jsonl")
+	d.Cfg.PrunePercent = 80
+	st := state.State{PrunePercent: state.Knob{Value: 74, Since: now.Add(-48 * time.Hour)}} // saved before Base existed
+	TunePlan(d, &st, now)
+	if st.PrunePercent.Value != 74 || st.PrunePercent.Base != 80 {
+		t.Fatalf("%+v", st.PrunePercent)
 	}
 }

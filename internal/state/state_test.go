@@ -2,7 +2,9 @@ package state
 
 import (
 	"errors"
+	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"testing"
@@ -59,6 +61,24 @@ func TestLockReplacesStale(t *testing.T) {
 	os.WriteFile(p, []byte("1\n"), 0o644)
 	old := time.Now().Add(-3 * time.Hour)
 	os.Chtimes(p, old, old)
+	unlock, err := Lock(p, 2*time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	unlock()
+}
+
+func TestLockTakesOverFromDeadProcess(t *testing.T) {
+	exe, _ := os.Executable()
+	cmd := exec.Command(exe, "-test.run=^$") // runs nothing and exits
+	if err := cmd.Run(); err != nil {
+		t.Fatal(err)
+	}
+	if alive(cmd.Process.Pid) || !alive(os.Getpid()) {
+		t.Fatal("alive() is wrong")
+	}
+	p := filepath.Join(t.TempDir(), "lock")
+	os.WriteFile(p, []byte(fmt.Sprintf("%d 1\n", cmd.Process.Pid)), 0o644) // fresh, holder gone
 	unlock, err := Lock(p, 2*time.Hour)
 	if err != nil {
 		t.Fatal(err)

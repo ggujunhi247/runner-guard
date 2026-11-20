@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -28,13 +29,37 @@ func TunePlan(d Deps, st *state.State, now time.Time) (tune.Plan, error) {
 	if err != nil {
 		return tune.Plan{}, err
 	}
+	in := tune.Input{History: h, Cfg: d.Cfg, Now: now, Cores: runtime.NumCPU(), Windows: runtime.GOOS == "windows"}
 	var notes []string
-	if len(h) > 0 {
-		if c := h[len(h)-1].Concurrent; c > 0 && tune.SyncKnob(&st.Concurrent, float64(c)) {
+	// The files are the truth; a hand edit restarts that knob's tuning.
+	if c, err := tune.ReadConcurrent(d.Cfg.RunnerConfig); err == nil {
+		in.Concurrent = c
+		if tune.SyncKnob(&st.Concurrent, float64(c)) {
 			notes = append(notes, "concurrent was changed by hand; tuning starts over from it")
 		}
 	}
-	p := tune.Decide(tune.Input{History: h, State: *st, Cfg: d.Cfg, Now: now, Cores: runtime.NumCPU(), Windows: runtime.GOOS == "windows"})
+	if in.Windows {
+		if home, err := os.UserHomeDir(); err == nil {
+			b, _ := os.ReadFile(filepath.Join(home, ".wslconfig"))
+			in.WSLMemGB, in.WSLSwapGB = tune.WSLValue(b, "memory"), tune.WSLValue(b, "swap")
+			for _, k := range []struct {
+				k *state.Knob
+				v float64
+			}{{&st.WSLMemoryGB, in.WSLMemGB}, {&st.WSLSwapGB, in.WSLSwapGB}} {
+				if k.v > 0 && tune.SyncKnob(k.k, k.v) {
+					notes = append(notes, ".wslconfig was changed by hand; WSL tuning starts over from it")
+				}
+			}
+		}
+	}
+	if k := &st.PrunePercent; k.Value > 0 && k.Base == 0 {
+		k.Base = d.Cfg.PrunePercent // learned by a version that did not record it
+	} else if k.Base > 0 && k.Base != d.Cfg.PrunePercent {
+		*k = state.Knob{}
+		notes = append(notes, "prune_percent was changed in config; the learned value is dropped")
+	}
+	in.State = *st
+	p := tune.Decide(in)
 	p.Notes = append(notes, p.Notes...)
 	return p, nil
 }
@@ -73,9 +98,11 @@ func dailyTune(ctx context.Context, d Deps, st *state.State, now time.Time, logf
 		st.LastProposal = report
 		return nil, false
 	}
+	var revertWaits bool
 	for _, c := range p.Changes {
 		k := knob(st, c.Knob)
-		if k.Frozen {
+		// Frozen stops raises and WSL restarts; a cheap lowering under stress still goes through.
+		if k.Frozen && (c.To > c.From || c.Knob == tune.WSLMemory || c.Knob == tune.WSLSwap) {
 			logf("tune: %s skipped: %s is frozen (runner-guard tune --reset)", c, c.Knob)
 			continue
 		}
@@ -83,6 +110,7 @@ func dailyTune(ctx context.Context, d Deps, st *state.State, now time.Time, logf
 		if errors.Is(err, errBusy) {
 			logf("tune: %s deferred: %v", c, err)
 			retry = true
+			revertWaits = revertWaits || c.Revert
 			continue
 		}
 		if err != nil {
@@ -94,7 +122,7 @@ func dailyTune(ctx context.Context, d Deps, st *state.State, now time.Time, logf
 		if k.Frozen {
 			msg += fmt.Sprintf("; %s frozen after 2 reverts", c.Knob)
 		}
-		return []string{msg}, false
+		return []string{msg}, revertWaits // only undoing harm keeps the hourly retry
 	}
 	return nil, retry
 }

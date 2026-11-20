@@ -2,6 +2,7 @@
 package config
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -62,6 +63,10 @@ func Load(path string) (Config, error) {
 	if err != nil {
 		return c, err
 	}
+	if bytes.IndexByte(b, 0) >= 0 {
+		return c, fmt.Errorf("%s is UTF-16; save it as UTF-8", path)
+	}
+	b = bytes.TrimPrefix(b, []byte{0xEF, 0xBB, 0xBF}) // Notepad's BOM
 	if err := json.Unmarshal(b, &c); err != nil {
 		return c, fmt.Errorf("%s: %w", path, err)
 	}

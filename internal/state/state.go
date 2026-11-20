@@ -42,6 +42,7 @@ type Knob struct {
 	Ceiling float64   `json:"ceiling,omitempty"` // a raise to this value failed once
 	Reverts int       `json:"reverts,omitempty"`
 	Frozen  bool      `json:"frozen,omitempty"`
+	Base    float64   `json:"base,omitempty"` // value before the first change (the config value for prune)
 }
 
 // Load never fails: a missing file is a fresh start, an empty or corrupt one
