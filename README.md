@@ -119,7 +119,7 @@ Windows 러너는 CI 전용 호스트로 보고, 이미지 정리와 디스크 �
 
 설치, 재설치, 버전 고정은 모두 이 저장소의 스크립트 한 줄로 합니다.
 
-**Windows 호스트는 [docs/windows.md](docs/windows.md)를 따라 하세요.** 준비(자동 로그온, 절전), 설치, 설정 바꾸기, 평소 운영, 알림별 할 일, 문제 해결을 명령과 함께 정리했습니다.
+**Windows 호스트는 [docs/windows.md](docs/windows.md)를 따라 하세요.** 준비(자동 로그온, 절전), 설치, 설정 바꾸기, 평소 운영, 알림별 할 일, 문제 해결을 명령과 함께 정리했습니다. 같은 일을 하는 도우미 스크립트 `rg-windows.ps1`도 릴리스마다 같이 올라갑니다.
 
 - 스크립트는 [Releases](https://github.com/ggujunhi247/runner-guard/releases)에서 바이너리와 `checksums.txt`를 받습니다.
 - SHA256과 `selftest`를 확인한 뒤 `install`을 실행합니다.

@@ -6,6 +6,39 @@ Docker Desktop과 GitLab Runner(docker executor)가 도는 Windows 호스트에 
 - **관리자 PowerShell**: Docker Desktop을 쓰는 그 사용자로 로그인한 뒤, "관리자 권한으로 실행"으로 연 PowerShell입니다.
 - 다른 관리자 계정으로 권한을 올려서 설치하면 안 됩니다. 예약 작업이 로그인하지 않는 그 계정에 등록되어 돌지 않습니다.
 
+## 0. 도우미 스크립트 `rg-windows.ps1`로 하기
+
+아래 단계를 스크립트 하나로 할 수 있습니다. 스크립트는 [Releases](https://github.com/ggujunhi247/runner-guard/releases/latest)에 이 안내서(`runner-guard-windows-guide.md`)와 같이 올라가 있습니다. 관리자 PowerShell에서 실행합니다.
+
+```powershell
+# 받기 (원하는 폴더에서)
+irm https://github.com/ggujunhi247/runner-guard/releases/latest/download/rg-windows.ps1 -OutFile rg-windows.ps1
+# 스크립트 실행이 막혀 있으면 이 창에서만 풀기
+Set-ExecutionPolicy -Scope Process Bypass
+
+.\rg-windows.ps1 preflight                    # 1. 준비 상태 점검: 자동 로그온, Docker, 러너 서비스, 절전
+.\rg-windows.ps1 nosleep                      #    절전·최대 절전 끄기
+.\rg-windows.ps1 install                      # 2. 설치·재설치·최신으로 (버전 고정: install v0.8.1)
+.\rg-windows.ps1 set desktop_budget_gb 120    #    설정 바꾸기 (UTF-8로 저장)
+.\rg-windows.ps1 set alert_webhook 'https://hooks.slack.com/services/...'
+.\rg-windows.ps1 status                       #    PROBLEM 줄이 없어야 함
+```
+
+| 하려는 일 | 명령 |
+| --- | --- |
+| 상태 / 로그 / 예약 작업 | `status` / `log 100` / `tasks` |
+| 설정 보기 / 바꾸기 / 기본값으로 | `config` / `set <키> <값>` / `unset <키>` |
+| 지금 한 번 점검 실행 | `run` |
+| 자동 조정 보기 / 배운 값 지우기 | `tune` / `tune-reset` |
+| 자동 조정 끄기(제안만) / 켜기 | `tune-off` / `tune-on` |
+| 점검 중 잠시 멈추기 / 다시 켜기 | `pause` / `resume` |
+| 업데이트 확인 / 지금 업데이트 | `check-update` / `update` |
+| 제거 | `uninstall` |
+
+- `set`의 값은 숫자, `true`/`false`, 목록(`'["C:\\marker"]'`)이면 그대로 들어가고, 나머지는 글자로 들어갑니다.
+- `.\rg-windows.ps1 help`로 전체 목록을 봅니다.
+- 아래 절들은 스크립트 없이 같은 일을 하는 명령과, 각 단계의 이유입니다.
+
 ## 1. 설치 전 준비 (한 번)
 
 ### 1-1. 러너 사용자가 늘 로그인해 있게 하기

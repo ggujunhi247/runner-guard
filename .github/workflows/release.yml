@@ -51,12 +51,19 @@ jobs:
     needs: [build, windows-check]
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: src
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: dist
       - env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create "$GITHUB_REF_NAME" -R "$GITHUB_REPOSITORY" runner-guard_* checksums.txt --generate-notes
+        # The Windows helper and its guide ride along; the updater only takes runner-guard_<os>_<arch>.
+        run: |
+          cp src/rg-windows.ps1 .
+          cp src/docs/windows.md runner-guard-windows-guide.md
+          gh release create "$GITHUB_REF_NAME" -R "$GITHUB_REPOSITORY" runner-guard_* checksums.txt rg-windows.ps1 runner-guard-windows-guide.md --generate-notes
 
   # The real thing: the previous release's binary updates itself to this one.
   update-smoke:
@@ -132,5 +139,14 @@ jobs:
           $hist = Join-Path $env:ProgramData 'runner-guard\history.jsonl'
           if (-not (Test-Path $hist)) { throw 'sample wrote no history' }
           & $bin tune
+          # The helper script drives the same install.
+          .\rg-windows.ps1 preflight
+          .\rg-windows.ps1 set desktop_budget_gb 120
+          .\rg-windows.ps1 set refuse_if_exists '["C:\\no-such-marker"]'
+          .\rg-windows.ps1 status
+          if ($LASTEXITCODE -ne 0) { throw 'status failed after set' }
+          .\rg-windows.ps1 tasks
+          .\rg-windows.ps1 pause
+          .\rg-windows.ps1 resume
           & $bin uninstall
           if ($LASTEXITCODE -ne 0) { throw 'uninstall failed' }
