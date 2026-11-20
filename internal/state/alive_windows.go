@@ -1,18 +1,20 @@
 package state
 
-import (
-	"errors"
-	"os"
-	"syscall"
-)
+import "syscall"
 
-// alive: OpenProcess fails with ERROR_INVALID_PARAMETER once the process is
-// gone. Access denied (an elevated holder) still means alive.
+// alive: a process that cannot be opened (ERROR_INVALID_PARAMETER) is gone;
+// access denied (an elevated holder) counts as alive. One that opens may
+// still have exited while someone holds a handle, so check its exit code.
 func alive(pid int) bool {
-	p, err := os.FindProcess(pid)
+	const queryLimited, stillActive = 0x1000, 259
+	h, err := syscall.OpenProcess(queryLimited, false, uint32(pid))
 	if err != nil {
-		return !errors.Is(err, syscall.Errno(87))
+		return err != syscall.Errno(87)
 	}
-	p.Release()
-	return true
+	defer syscall.CloseHandle(h)
+	var code uint32
+	if syscall.GetExitCodeProcess(h, &code) != nil {
+		return true
+	}
+	return code == stillActive
 }
