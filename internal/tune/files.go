@@ -71,7 +71,19 @@ func writeIfUnchanged(path string, orig, data []byte) error {
 		mode = fi.Mode().Perm()
 	}
 	tmp := path + ".runner-guard.new"
-	if err := os.WriteFile(tmp, data, mode); err != nil {
+	// Fresh file only: a pre-made one would keep its owner and ACL, and the
+	// rename would hand them the runner tokens in config.toml.
+	os.Remove(tmp)
+	f, err := os.OpenFile(tmp, os.O_CREATE|os.O_EXCL|os.O_WRONLY, mode)
+	if err != nil {
+		return err
+	}
+	_, err = f.Write(data)
+	if cerr := f.Close(); err == nil {
+		err = cerr
+	}
+	if err != nil {
+		os.Remove(tmp)
 		return err
 	}
 	if now, err := os.ReadFile(path); err != nil && !os.IsNotExist(err) || err == nil && !bytes.Equal(now, orig) {

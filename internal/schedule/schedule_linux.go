@@ -126,3 +126,10 @@ func Uninstall(ctx context.Context, r execx.Runner) error {
 	}
 	return errors.Join(errs...)
 }
+
+// SecureDir: the Linux install paths live in root-only parents
+// (/usr/local/bin, /etc, /var/lib), so nobody else can have made them first.
+func SecureDir(context.Context, execx.Runner, string) error { return nil }
+
+// LockFile makes path root-only (the config holds the webhook URL).
+func LockFile(_ context.Context, _ execx.Runner, path string) error { return os.Chmod(path, 0o600) }

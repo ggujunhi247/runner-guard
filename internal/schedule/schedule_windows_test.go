@@ -28,8 +28,6 @@ func TestInstallWindowsCommands(t *testing.T) {
 	user := os.Getenv("USERDOMAIN") + `\` + os.Getenv("USERNAME")
 	desktop := filepath.Join(os.Getenv("ProgramFiles"), "Docker", "Docker", "Docker Desktop.exe")
 	want := [][]string{
-		{"icacls", `C:\ProgramData\runner-guard`, "/inheritance:r", "/grant:r",
-			"*S-1-5-32-544:(OI)(CI)F", "*S-1-5-18:(OI)(CI)F", "*S-1-5-32-545:(OI)(CI)RX"},
 		{"schtasks", "/Create", "/F", "/RL", "HIGHEST", "/IT", "/RU", user,
 			"/TN", "runner-guard-run", "/SC", "HOURLY", "/ST", "10:05", "/TR", headless(bin, "run")},
 		{"schtasks", "/Create", "/F", "/RL", "HIGHEST", "/IT", "/RU", user,
@@ -52,5 +50,15 @@ func TestEnsureSampleOnlyWhenMissing(t *testing.T) {
 	f = &execx.Fake{Responses: map[string]execx.FakeResponse{"schtasks /Query /TN runner-guard-sample": {Err: errors.New("not found")}}}
 	if added, err := EnsureSample(context.Background(), f, `C:\x.exe`); !added || err != nil || len(f.Calls) != 2 {
 		t.Fatalf("missing task not added: %v %v %v", added, err, f.Calls)
+	}
+}
+
+func TestSecureDirTakesOwnershipBeforeGranting(t *testing.T) {
+	f := &execx.Fake{}
+	if err := SecureDir(context.Background(), f, `C:\ProgramData\runner-guard`); err != nil {
+		t.Fatal(err)
+	}
+	if len(f.Calls) != 3 || f.Calls[0][2] != "/setowner" || f.Calls[1][2] != "/inheritance:r" || f.Calls[2][2] != "/reset" {
+		t.Fatalf("calls %q", f.Calls)
 	}
 }

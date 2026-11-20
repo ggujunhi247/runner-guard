@@ -60,8 +60,31 @@ function Invoke-Preflight {
     # Output is localized; the first index line is the AC setting (0 = never).
     $idx = powercfg /query SCHEME_CURRENT SUB_SLEEP STANDBYIDLE 2>$null | Select-String '0x[0-9a-fA-F]{8}\s*$' | Select-Object -First 1
     Show-Check ($idx -and $idx.Line -match '0x00000000\s*$') 'sleep on AC power is off' '.\rg-windows.ps1 nosleep'
+    $rd = Get-RunnerDir
+    if (Test-Path $rd) {
+        Show-Check (-not (Test-WritableByUsers $rd)) "only admins can write $rd (runner tokens)" '.\rg-windows.ps1 secure-runner'
+    }
     if (Test-Path $rg) { Write-Host "  info  installed: $(& $rg version)" } else { Write-Host '  info  runner-guard not installed yet' }
     if ($bad) { Write-Host "$bad item(s) to fix." -ForegroundColor Yellow } else { Write-Host 'All good.' }
+}
+
+# The gitlab-runner folder holding config.toml (runner tokens).
+function Get-RunnerDir {
+    $c = (Read-Config).runner_config
+    if (-not $c) { $c = 'C:\GitLab-Runner\config.toml' }
+    Split-Path $c -Parent
+}
+# Does Everyone, Authenticated Users or Users have write access? SIDs, so it works on any Windows language.
+function Test-WritableByUsers([string]$path) {
+    $open = 'S-1-1-0', 'S-1-5-11', 'S-1-5-32-545'
+    # Write bits only (FullControl also holds read bits): create file/folder, change
+    # permissions or owner, and the generic write/all forms inherit-only ACEs use.
+    $write = 0x2 -bor 0x4 -bor 0x40000 -bor 0x80000 -bor 0x40000000 -bor 0x10000000
+    foreach ($a in (Get-Acl $path).Access) {
+        try { $sid = $a.IdentityReference.Translate([Security.Principal.SecurityIdentifier]).Value } catch { continue }
+        if ($a.AccessControlType -eq 'Allow' -and $open -contains $sid -and ([int64]$a.FileSystemRights -band $write)) { return $true }
+    }
+    $false
 }
 
 function Get-State {
@@ -131,6 +154,18 @@ switch ($Command) {
             schtasks /Query /TN $t /V /FO LIST | Select-String 'TaskName|Status|Run As User|Next Run Time|Last Result'
         }
     }
+    'secure-runner' {
+        Assert-Admin
+        $rd = Get-RunnerDir
+        if (-not (Test-Path $rd)) { throw "$rd not found; set runner_config first" }
+        $grants = @('*S-1-5-32-544:(OI)(CI)F', '*S-1-5-18:(OI)(CI)F')
+        $svc = (Read-Config).runner_service; if (-not $svc) { $svc = 'gitlab-runner' }
+        $acct = (Get-CimInstance Win32_Service -Filter "Name='$svc'" -ErrorAction SilentlyContinue).StartName
+        if ($acct -and $acct -ne 'LocalSystem') { $grants += "${acct}:(OI)(CI)M" } # the service must keep access
+        icacls $rd /inheritance:r /grant:r @grants
+        if ($LASTEXITCODE) { throw 'icacls failed' }
+        Write-Host "$rd is now Administrators/SYSTEM only$(if ($acct -and $acct -ne 'LocalSystem') { " plus $acct" })."
+    }
     'uninstall' { Assert-Admin; Invoke-RG uninstall }
     default {
         @'
@@ -150,6 +185,7 @@ runner-guard helper (guide: docs/windows.md in github.com/ggujunhi247/runner-gua
                        set alert_webhook https://... / set refuse_if_exists '["C:\\marker"]'
   unset <key>          back to the default
   pause | resume       disable | enable the tasks during maintenance
+  secure-runner        let only admins write the gitlab-runner folder (holds runner tokens)
   check-update | update
   uninstall
 '@ | Write-Host

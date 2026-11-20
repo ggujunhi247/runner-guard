@@ -2,6 +2,8 @@ name: ci
 on:
   push:
   pull_request:
+permissions:
+  contents: read
 jobs:
   test:
     strategy:
@@ -43,3 +45,23 @@ jobs:
           bad=$(git log --format='%h %ae%n%h %ce' "$REV" --remotes=origin --tags | grep -v 'noreply' | cut -d' ' -f1 | sort -u | tr '\n' ' ' || true)
           if [ -n "$bad" ]; then echo "::error::commit(s) with a non-noreply email: $bad"; status=1; fi
           exit $status
+
+  # Secrets in any commit (full history) or file. Locally the same check runs
+  # from the pre-commit hook, so a secret is caught before it is committed.
+  gitleaks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - name: gitleaks v8.30.1 (checksum pinned)
+        run: |
+          v=8.30.1; f=gitleaks_${v}_linux_x64.tar.gz
+          curl -fsSLo "$f" "https://github.com/gitleaks/gitleaks/releases/download/v${v}/${f}"
+          echo "551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb  $f" | sha256sum -c -
+          tar -xzf "$f" gitleaks
+          # Only real commits: GitHub's PR test-merge commit is not part of the repo.
+          ./gitleaks git --no-banner --redact --exit-code 1 --log-opts="$REV --remotes=origin --tags" .
+          ./gitleaks dir --no-banner --redact --exit-code 1 .
+        env:
+          REV: ${{ github.event.pull_request.head.sha || github.sha }}
