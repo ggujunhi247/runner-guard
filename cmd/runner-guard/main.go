@@ -63,6 +63,10 @@ func realMain(args []string) int {
 		return 2
 	}
 
+	if msg := needsRoot(cmd, *checkOnly, *reset); msg != "" {
+		fmt.Fprintln(os.Stderr, "[runner-guard] error:", msg)
+		return 1
+	}
 	var err error
 	switch cmd {
 	case "version":
@@ -97,7 +101,11 @@ func realMain(args []string) int {
 			return err
 		})
 	case "update":
-		err = withLog(func(w io.Writer) error { return doUpdate(ctx, w, *checkOnly) })
+		if *checkOnly { // reads nothing local; works without root
+			err = doUpdate(ctx, os.Stdout, true)
+		} else {
+			err = withLog(func(w io.Writer) error { return doUpdate(ctx, w, false) })
+		}
 	case "sample":
 		err = doSample(ctx)
 	case "tune":
@@ -135,6 +143,21 @@ func deps(ctx context.Context, log io.Writer) (guard.Deps, error) {
 		d.Alert = func(ctx context.Context, msg string) error { return alert.Send(ctx, cfg.AlertWebhook, msg) }
 	}
 	return d, nil
+}
+
+// needsRoot explains, before anything fails half-way, that a command which
+// writes the state folder or system services needs root. Windows has its
+// own elevation messages.
+func needsRoot(cmd string, checkOnly, reset bool) string {
+	if runtime.GOOS == "windows" || os.Geteuid() == 0 {
+		return ""
+	}
+	switch {
+	case cmd == "run", cmd == "sample", cmd == "install", cmd == "uninstall",
+		cmd == "update" && !checkOnly, cmd == "tune" && reset:
+		return cmd + " needs root: sudo runner-guard " + strings.Join(os.Args[1:], " ")
+	}
+	return ""
 }
 
 func statePath() string { return filepath.Join(config.Dir(), "state.json") }
@@ -323,6 +346,9 @@ func runStatus(ctx context.Context, d guard.Deps, asJSON bool, w io.Writer) erro
 		return enc.Encode(s)
 	}
 	docker := "NOT responding"
+	if runtime.GOOS != "windows" && os.Geteuid() != 0 {
+		docker += " (or this user may not use Docker: run with sudo)"
+	}
 	if s.DockerHealthy {
 		docker = "healthy"
 	}
@@ -362,12 +388,6 @@ func doUpdate(ctx context.Context, w io.Writer, checkOnly bool) error {
 		logf("update skipped: auto_update is false")
 		return nil
 	}
-	// Same lock as run: never swap the binary mid-run.
-	unlock, err := waitLock(ctx, 30*time.Minute)
-	if err != nil {
-		return err
-	}
-	defer unlock()
 	bin, err := os.Executable()
 	if err != nil {
 		return err
@@ -375,7 +395,15 @@ func doUpdate(ctx context.Context, w io.Writer, checkOnly bool) error {
 	if resolved, err := filepath.EvalSymlinks(bin); err == nil {
 		bin = resolved
 	}
-	update.Cleanup(bin)
+	if !checkOnly { // --check changes nothing, so it needs neither the lock nor root
+		// Same lock as run: never swap the binary mid-run.
+		unlock, err := waitLock(ctx, 30*time.Minute)
+		if err != nil {
+			return err
+		}
+		defer unlock()
+		update.Cleanup(bin)
+	}
 
 	client := &http.Client{Timeout: 10 * time.Minute}
 	rel, err := update.Check(ctx, client, "https://api.github.com", cfg.UpdateRepo)
