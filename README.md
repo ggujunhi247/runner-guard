@@ -225,6 +225,26 @@ runner-guard selftest | version
 
 상태와 로그 위치: Linux는 `/var/lib/runner-guard/`, Windows는 `%ProgramData%\runner-guard\`입니다(`state.json`, `runner-guard.log`, `history.jsonl`). 로그가 1MB를 넘으면 `runner-guard.log.1`로 한 번 회전합니다. Linux에서는 journald에도 남습니다(`journalctl -u runner-guard-run`).
 
+## 변경 흐름 (자동 머지)
+
+`main`에는 직접 push할 수 없습니다. 브랜치에서 PR을 열면 검사가 끝나는 대로 GitHub가 스스로 머지합니다.
+
+```sh
+git switch -c fix/something
+git push -u origin fix/something
+gh pr create --fill          # 저장소 주인의 PR은 자동 머지가 켜짐
+```
+
+- **머지 조건** (`main` ruleset):
+  - `test (ubuntu-latest)`, `test (windows-latest)`, `leak-scan`이 통과해야 합니다. 승인은 필요 없습니다.
+  - rebase 머지만 됩니다. 커밋마다 작성자(noreply 주소)가 그대로 남고, 기록이 한 줄로 이어집니다.
+  - 머지된 브랜치는 지워집니다.
+- **자동 머지 대상** (`.github/workflows/automerge.yml`):
+  - 저장소 주인이 이 저장소 브랜치에서 연 PR. draft이거나 `no-automerge` 라벨이 있으면 제외합니다.
+  - Dependabot의 Actions 업데이트(매주 한 PR로 묶음). major 버전은 사람이 보도록 댓글만 남깁니다.
+- 자동 머지를 멈추려면 PR에 `no-automerge` 라벨을 붙이거나 `gh pr merge --disable-auto`를 실행합니다.
+- 릴리스는 자동이 아닙니다. 머지 뒤 `main`에서 태그를 push합니다(아래).
+
 ## 업데이트와 릴리스
 
 ```sh
