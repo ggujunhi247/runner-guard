@@ -4,7 +4,9 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 	"time"
 
@@ -39,5 +41,22 @@ func TestStatusJSON(t *testing.T) {
 func TestSelftest(t *testing.T) {
 	if err := selftest(); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestNeedsRootOnlyForWritingCommands(t *testing.T) {
+	if runtime.GOOS == "windows" || os.Geteuid() == 0 {
+		t.Skip("only meaningful for a non-root Linux user")
+	}
+	for _, c := range []struct {
+		cmd          string
+		check, reset bool
+		want         bool
+	}{{"run", false, false, true}, {"sample", false, false, true}, {"update", false, false, true},
+		{"update", true, false, false}, {"status", false, false, false}, {"tune", false, false, false},
+		{"tune", false, true, true}, {"uninstall", false, false, true}} {
+		if got := needsRoot(c.cmd, c.check, c.reset) != ""; got != c.want {
+			t.Errorf("%s check=%v reset=%v: needs root %v, want %v", c.cmd, c.check, c.reset, got, c.want)
+		}
 	}
 }
