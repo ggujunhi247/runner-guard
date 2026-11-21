@@ -36,7 +36,7 @@ jobs:
           gh release download "$prev" -R "$GITHUB_REPOSITORY" -p "$asset"
           chmod +x "$asset"
           echo "before: $(./$asset version)"
-          $sudo RUNNER_GUARD_GITHUB_TOKEN="$GH_TOKEN" ./$asset update
+          $sudo env RUNNER_GUARD_GITHUB_TOKEN="$GH_TOKEN" ./$asset update
           after=$(./$asset version | tr -d '\r')
           echo "after: $after"
           test "$after" = "$TAG"
