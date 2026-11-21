@@ -2,8 +2,13 @@ package update
 
 import (
 	"context"
+	"crypto"
+	"crypto/rand"
+	"crypto/rsa"
 	"crypto/sha256"
+	"crypto/x509"
 	"encoding/hex"
+	"encoding/pem"
 	"errors"
 	"fmt"
 	"net/http"
@@ -11,8 +16,45 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 )
+
+// The tests sign with their own key; the real one is checked first.
+var (
+	releasePublicKey = PublicKey
+	testKey          *rsa.PrivateKey
+)
+
+func TestMain(m *testing.M) {
+	var err error
+	if testKey, err = rsa.GenerateKey(rand.Reader, 2048); err != nil {
+		panic(err)
+	}
+	der, _ := x509.MarshalPKIXPublicKey(&testKey.PublicKey)
+	PublicKey = string(pem.EncodeToMemory(&pem.Block{Type: "PUBLIC KEY", Bytes: der}))
+	os.Exit(m.Run())
+}
+
+func sign(t *testing.T, data []byte) []byte {
+	h := sha256.Sum256(data)
+	sig, err := rsa.SignPKCS1v15(rand.Reader, testKey, crypto.SHA256, h[:])
+	if err != nil {
+		t.Fatal(err)
+	}
+	return sig
+}
+
+func TestReleaseKeyIsUsable(t *testing.T) {
+	blk, _ := pem.Decode([]byte(releasePublicKey))
+	if blk == nil {
+		t.Fatal("no PEM")
+	}
+	k, err := x509.ParsePKIXPublicKey(blk.Bytes)
+	if rk, ok := k.(*rsa.PublicKey); err != nil || !ok || rk.N.BitLen() < 3072 {
+		t.Fatalf("release key: %v", err)
+	}
+}
 
 func TestNewer(t *testing.T) {
 	cases := []struct {
@@ -31,12 +73,23 @@ func TestNewer(t *testing.T) {
 }
 
 func TestParseChecksums(t *testing.T) {
-	got, err := ParseChecksums("abc123  runner-guard_linux_amd64\n", "runner-guard_linux_amd64")
-	if err != nil || got != "abc123" {
+	h := strings.Repeat("ab", 32)
+	evil := strings.Repeat("cd", 32)
+	if got, err := ParseChecksums(h+"  other\n"+h+" *runner-guard_linux_amd64\n", "runner-guard_linux_amd64"); err != nil || got != h {
 		t.Fatalf("got %q, %v", got, err)
 	}
-	if _, err := ParseChecksums("abc123  other\n", "runner-guard_linux_amd64"); err == nil {
-		t.Fatal("want error for missing asset")
+	for name, text := range map[string]string{
+		"missing":       h + "  other\n",
+		"vertical tab":  evil + "\vrunner-guard_linux_amd64\n" + h + "  runner-guard_linux_amd64\n",
+		"nbsp":          evil + " runner-guard_linux_amd64\n" + h + "  runner-guard_linux_amd64\n",
+		"twice":         h + "  runner-guard_linux_amd64\n" + evil + "  runner-guard_linux_amd64\n",
+		"short hash":    "abc123  runner-guard_linux_amd64\n",
+		"upper-case":    strings.ToUpper(h) + "  runner-guard_linux_amd64\n",
+		"trailing junk": h + "  runner-guard_linux_amd64 x\n",
+	} {
+		if _, err := ParseChecksums(text, "runner-guard_linux_amd64"); err == nil {
+			t.Errorf("%s: accepted", name)
+		}
 	}
 }
 
@@ -91,10 +144,12 @@ func releaseServer(t *testing.T, body string, goodSum bool) (*httptest.Server, R
 			fmt.Fprint(w, body)
 		case "/sums":
 			fmt.Fprintf(w, "%s  %s\n", hexSum, asset)
+		case "/sig":
+			w.Write(sign(t, []byte(fmt.Sprintf("%s  %s\n", hexSum, asset))))
 		}
 	}))
 	t.Cleanup(srv.Close)
-	return srv, Release{Tag: "v0.2.0", Assets: map[string]string{asset: srv.URL + "/bin", "checksums.txt": srv.URL + "/sums"}}
+	return srv, Release{Tag: "v0.2.0", Assets: map[string]string{asset: srv.URL + "/bin", "checksums.txt": srv.URL + "/sums", "checksums.txt.sig": srv.URL + "/sig"}}
 }
 
 func tempBin(t *testing.T) string {
@@ -166,5 +221,48 @@ func TestReplaceInstallsAndReinstalls(t *testing.T) {
 		if b, _ := os.ReadFile(bin); string(b) != body {
 			t.Fatalf("got %q want %q", b, body)
 		}
+	}
+}
+
+func TestApplyRefusesUnsignedOrWronglySigned(t *testing.T) {
+	srv, rel := releaseServer(t, "new", true)
+	bin := tempBin(t)
+	unsigned := Release{Tag: rel.Tag, Assets: map[string]string{}}
+	wrong := Release{Tag: rel.Tag, Assets: map[string]string{}}
+	for k, v := range rel.Assets {
+		wrong.Assets[k] = v
+		if k != "checksums.txt.sig" {
+			unsigned.Assets[k] = v
+		}
+	}
+	wrong.Assets["checksums.txt.sig"] = srv.URL + "/bin" // not a signature
+	for name, r := range map[string]Release{"unsigned": unsigned, "wrong": wrong} {
+		err := Apply(context.Background(), srv.Client(), r, bin, func(string) error { return nil })
+		if err == nil || !strings.Contains(err.Error(), "not installing") {
+			t.Fatalf("%s: %v", name, err)
+		}
+		if b, _ := os.ReadFile(bin); string(b) != "old" {
+			t.Fatalf("%s: binary changed", name)
+		}
+	}
+}
+
+func TestCheckSendsOnlyTheNamedToken(t *testing.T) {
+	var auth string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		auth = r.Header.Get("Authorization")
+		w.WriteHeader(403)
+	}))
+	defer srv.Close()
+	t.Setenv("GITHUB_TOKEN", "unrelated")
+	t.Setenv("RUNNER_GUARD_GITHUB_TOKEN", "")
+	Check(context.Background(), srv.Client(), srv.URL, "o/r")
+	if auth != "" {
+		t.Fatalf("sent %q without RUNNER_GUARD_GITHUB_TOKEN", auth)
+	}
+	t.Setenv("RUNNER_GUARD_GITHUB_TOKEN", "tok")
+	Check(context.Background(), srv.Client(), srv.URL, "o/r")
+	if auth != "Bearer tok" {
+		t.Fatalf("got %q", auth)
 	}
 }

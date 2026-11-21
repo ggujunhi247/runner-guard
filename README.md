@@ -144,7 +144,7 @@ Windows 러너는 CI 전용 호스트로 보고, 이미지 정리와 디스크 �
   - 재부팅 복구가 켜져 있는데 자동 로그온이 꺼져 있음
   - 설치 직후와 재설치 뒤에 한 번 보세요.
 - 자동 업데이트를 끄고 버전을 고정하려면, 설정에 `"auto_update": false`를 두고 `RG_VERSION`으로 재설치합니다.
-- 새 버전을 내는 쪽은 `vX.Y.Z` 태그를 push하면 됩니다. [업데이트와 릴리스](#업데이트와-릴리스)를 보세요.
+- 새 버전을 내는 쪽은 `vX.Y.Z` 태그를 push하고 서명 키가 있는 PC에서 `scripts/sign-release.sh`를 실행합니다. [업데이트와 릴리스](#업데이트와-릴리스)를 보세요.
   - 릴리스 워크플로가 이전 버전의 실제 자동 업데이트를 확인합니다.
   - 이 스크립트로 두 번 설치하는 것도 Linux·Windows에서 확인합니다.
 
@@ -244,29 +244,43 @@ gh pr create --fill          # 저장소 주인의 PR은 자동 머지가 켜짐
   - 저장소 주인이 이 저장소 브랜치에서 연 PR. draft이거나 `no-automerge` 라벨이 있으면 제외합니다.
   - Dependabot의 Actions 업데이트(매주 한 PR로 묶음). 새 버전이 나온 지 7일이 지나야 제안합니다. 탈취된 릴리스가 보통 그 안에 드러나기 때문입니다. major 버전은 사람이 보도록 댓글만 남깁니다.
 - 자동 머지를 멈추려면 PR에 `no-automerge` 라벨을 붙이거나 `gh pr merge --disable-auto`를 실행합니다.
-- 릴리스는 자동이 아닙니다. 머지 뒤 `main`에서 태그를 push합니다(아래).
+- 릴리스는 자동이 아닙니다. 머지 뒤 `main`에서 태그를 push하고 서명합니다(아래).
 
 ## 업데이트와 릴리스
 
+릴리스는 **서명된 것만** 호스트가 받습니다. 서명 키는 GitHub에 없고 관리자 PC(`C:\Secrets\runner-guard\release-signing.pem`)에만 있습니다. GitHub 계정이나 CI가 털려도, 그것만으로는 호스트에 코드를 보낼 수 없습니다.
+
 ```sh
-git tag v0.3.0 && git push origin v0.3.0
+git tag v0.9.0 && git push origin v0.9.0     # 1. CI가 만들어서 draft로 올림
+scripts/sign-release.sh v0.9.0               # 2. 이 PC에서: 검증, 서명, 게시
 ```
 
-GitHub Actions가 순서대로 처리합니다.
-
-1. 태그가 `vX.Y.Z` 형식인지 확인합니다. 다른 형식은 거부합니다.
-2. 두 OS용 바이너리를 만들고, 각 OS에서 `selftest`와 `version`을 확인합니다.
-3. `runner-guard_linux_amd64`, `runner-guard_windows_amd64.exe`, `checksums.txt`를 Release에 올립니다.
-4. **바로 이전 Release의 바이너리로 실제 `update`를 실행해서** 새 버전으로 바뀌는지 Linux·Windows 모두에서 확인합니다(`update-smoke`).
+1. **CI** (`release.yml`)
+   - 태그가 `vX.Y.Z` 형식인지 확인합니다.
+   - 두 OS용 바이너리를 만들고, 각 OS에서 `selftest`와 `version`을 확인합니다.
+   - 바이너리, `checksums.txt`, `rg-windows.ps1`, 안내서를 **draft** Release로 올립니다. draft는 호스트에 보이지 않습니다.
+2. **`scripts/sign-release.sh`** (서명 키가 있는 PC, Git Bash)
+   - draft를 받아 `checksums.txt`와 맞는지 확인합니다.
+   - **태그 커밋에서 두 바이너리를 직접 다시 빌드해서**, CI가 올린 것과 한 바이트까지 같은지 확인합니다. Go 버전은 바이너리에 기록된 것을 씁니다. 다르면 서명하지 않습니다.
+   - `checksums.txt`에 서명해서 `checksums.txt.sig`를 올리고 Release를 게시합니다. 게시된 Release는 바꿀 수 없습니다(immutable release).
+   - `--check vX.Y.Z`를 붙이면 검사만 합니다. 이미 게시된 Release를 감사할 때 씁니다.
+3. **게시 뒤** (`release-check.yml`)
+   - 바로 이전 Release의 바이너리로 실제 `update`를 실행해서 새 버전으로 바뀌는지 Linux·Windows에서 확인합니다.
+   - 설치 스크립트로 두 번 설치하고 실제 명령을 돌려 봅니다.
 
 각 호스트는 24시간 안에 스스로 업데이트합니다. 바로 받으려면 호스트에서 `runner-guard update`를 실행하세요.
 
+- 호스트의 runner-guard와 설치 스크립트는 `checksums.txt.sig`가 내장된 공개 키로 확인되지 않으면 설치하지 않습니다. v0.9.0부터 적용되므로, 설치 스크립트로는 v0.9.0 이후 버전만 설치할 수 있습니다.
 - 버전은 semver가 올라갈 때만 바뀌고, 낮아지지 않습니다.
-- GitHub가 403·429(요청 한도)로 답하거나 Release에 이 OS용 파일이 없으면, 그날 업데이트는 건너뜁니다.
+- GitHub가 403·429(요청 한도)로 답하거나 Release에 이 OS용 파일이 없으면, 그날 업데이트는 건너뜁니다. 같은 주소 뒤에 호스트가 많으면 GitHub의 익명 한도(시간당 60번)를 나눠 씁니다. 그럴 때는 읽기 전용 토큰을 `RUNNER_GUARD_GITHUB_TOKEN` 환경 변수로 주세요. 이 이름의 변수만, GitHub API에만 보냅니다.
+
+> [!IMPORTANT]
+> **서명 키를 PC 밖에 백업하세요**(오프라인 USB, 비밀번호 관리자 등). 키를 잃으면 이미 설치된 호스트는 더 이상 업데이트를 받지 못합니다. 그때는 공개 키를 바꾼 버전을 각 호스트에서 설치 스크립트로 다시 설치해야 합니다.
+> 키가 새어 나갔다고 의심되면, 새 키를 만들고(`go run ./cmd/rgsign -genkey -key <새 경로>`) 공개 키를 `internal/update/sign.go`, `install.sh`, `install.ps1`에서 바꾼 뒤 모든 호스트를 다시 설치합니다.
 
 ## Windows Defender / Smart App Control
 
-exe에 서명하지 않았습니다. Defender나 Smart App Control이 막으면 우회 도구를 쓰지 말고, 받은 파일의 SHA256이 `checksums.txt`와 같은지 확인한 뒤 예외로 등록하세요.
+exe 자체에는 코드 서명(Authenticode)이 없습니다. Release는 위의 키로 서명합니다. Defender나 Smart App Control이 막으면 우회 도구를 쓰지 말고, 받은 파일의 SHA256이 `checksums.txt`와 같은지 확인한 뒤 예외로 등록하세요.
 
 ```powershell
 Get-FileHash .\runner-guard_windows_amd64.exe -Algorithm SHA256

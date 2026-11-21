@@ -83,9 +83,9 @@ powercfg /hibernate off
 irm https://raw.githubusercontent.com/ggujunhi247/runner-guard/main/install.ps1 | iex
 ```
 
-- 스크립트가 하는 일: GitHub Releases에서 바이너리를 받습니다. SHA256과 `selftest`로 확인한 뒤, `%ProgramData%\runner-guard`에 설치하고 예약 작업 네 개를 등록합니다.
+- 스크립트가 하는 일: GitHub Releases에서 바이너리를 받습니다. 릴리스 서명(`checksums.txt.sig`, GitHub 밖에 있는 키로 서명), SHA256, `selftest`를 확인한 뒤, `%ProgramData%\runner-guard`에 설치하고 예약 작업 네 개를 등록합니다.
 - 다시 실행하면 그 자리에서 재설치합니다. 설정, 상태, 사용량 기록은 그대로 남습니다.
-- 버전을 고정하려면 먼저 `$env:RG_VERSION = 'v0.8.0'`을 실행하고, 같은 줄을 실행합니다.
+- 버전을 고정하려면 먼저 `$env:RG_VERSION = 'v0.9.0'`을 실행하고, 같은 줄을 실행합니다.
 
 첫 `run`은 설치 15분 뒤입니다. 그 전에 2-2와 2-3을 끝내세요.
 
