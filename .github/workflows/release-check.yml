@@ -38,7 +38,7 @@ jobs:
           # Like a real host: install the previous release, then let the
           # installed binary update itself (it refuses to replace any other copy).
           $sudo ./$asset install
-          if [ "$RUNNER_OS" = "Windows" ]; then bin="$PROGRAMDATA/runner-guard/runner-guard.exe"; else bin=/usr/local/bin/runner-guard; fi
+          if [ "$RUNNER_OS" = "Windows" ]; then bin="$(cygpath -u "${ProgramData:-C:\ProgramData}")/runner-guard/runner-guard.exe"; else bin=/usr/local/bin/runner-guard; fi
           echo "before: $("$bin" version)"
           $sudo env RUNNER_GUARD_GITHUB_TOKEN="$GH_TOKEN" "$bin" update
           after=$("$bin" version | tr -d '\r')
