@@ -236,7 +236,15 @@ gh pr create --fill          # 저장소 주인의 PR은 자동 머지가 켜짐
 ```
 
 - **머지 조건** (`main` ruleset):
-  - `test (ubuntu-latest)`, `test (windows-latest)`, `leak-scan`, `gitleaks`가 통과해야 합니다. 승인은 필요 없습니다.
+  - 아래 검사가 모두 통과해야 합니다. 승인은 필요 없습니다.
+    - `test`(Linux·Windows): gofmt, vet, 테스트(Linux는 race detector). `internal/policy`의 보안 규칙 테스트도 여기서 돕니다.
+    - `govulncheck`: Go·표준 라이브러리의 알려진 취약점
+    - `lint`: actionlint, shellcheck, PowerShell 구문
+    - `e2e`(Linux·Windows): 이 커밋으로 만든 바이너리를 실제로 설치하고 `sample`, `run`, `status`, 도우미 스크립트, 제거까지 돌림. 권한(설정 파일, 설치 폴더 소유자)도 확인
+    - `install-scripts`(Linux·Windows): 이 커밋의 설치 스크립트로 최신 서명 릴리스를 설치
+    - `leak-scan`, `gitleaks`: 토큰·키·이메일
+  - 매주 `security-weekly`가 `main`과 최신 릴리스 바이너리를 govulncheck로 검사합니다. 실패하면 새 Go로 릴리스해야 한다는 뜻이고, GitHub가 메일로 알립니다.
+  - 보안 규칙과 신고 방법은 [SECURITY.md](SECURITY.md)에 있습니다.
   - `gitleaks`는 전체 커밋 기록과 파일에서 토큰·키를 찾습니다. 로컬에서는 pre-commit 훅이 같은 검사를 커밋 전에 합니다.
   - rebase 머지만 됩니다. 커밋마다 작성자(noreply 주소)가 그대로 남고, 기록이 한 줄로 이어집니다.
   - 머지된 브랜치는 지워집니다.

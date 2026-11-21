@@ -1,12 +1,19 @@
+# Every push and PR. All jobs below are required checks on main (ruleset), so
+# a change merges only when all of them pass.
 name: ci
 on:
   push:
   pull_request:
 permissions:
   contents: read
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
 jobs:
+  # Unit tests, including internal/policy (repo-wide security rules as tests).
   test:
     strategy:
+      fail-fast: false
       matrix:
         os: [ubuntu-latest, windows-latest]
     runs-on: ${{ matrix.os }}
@@ -15,13 +22,168 @@ jobs:
       - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
         with:
           go-version: "1.27" # build with a supported Go: stdlib security fixes ship in released binaries
+      - name: gofmt
+        if: runner.os == 'Linux'
+        run: |
+          out=$(gofmt -l .)
+          if [ -n "$out" ]; then echo "::error::not gofmt'ed:"; echo "$out"; exit 1; fi
       - run: go vet ./...
-      - run: go test ./...
       - name: vet other OS
         shell: bash
         run: |
           if [ "$RUNNER_OS" = "Linux" ]; then GOOS=windows go vet ./...; else GOOS=linux go vet ./...; fi
+      - name: test (race detector on Linux)
+        shell: bash
+        run: |
+          if [ "$RUNNER_OS" = "Linux" ]; then go test -race ./...; else go test ./...; fi
       - run: go build ./cmd/...
+
+  # Known vulnerabilities in the Go toolchain/stdlib or code paths we call.
+  govulncheck:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
+        with:
+          go-version: "1.27"
+      - run: go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./...
+
+  # Workflow and script linting.
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
+        with:
+          go-version: "1.27"
+      - name: actionlint
+        run: go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12
+      - name: shellcheck
+        run: shellcheck install.sh scripts/*.sh
+      - name: PowerShell scripts parse
+        shell: pwsh
+        run: |
+          $bad = 0
+          foreach ($f in Get-ChildItem -Recurse -Filter *.ps1 | Where-Object { $_.FullName -notmatch '[\\/]\.worktrees[\\/]' }) {
+            $errs = $null
+            [void][System.Management.Automation.Language.Parser]::ParseFile($f.FullName, [ref]$null, [ref]$errs)
+            foreach ($e in $errs) { Write-Host "::error file=$($f.Name)::$($e.Message)"; $bad++ }
+          }
+          if ($bad) { exit 1 }
+
+  # The binary built from this commit, installed and run for real.
+  e2e:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    env:
+      RUNNER_GUARD_GITHUB_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
+        with:
+          go-version: "1.27"
+      - name: Linux
+        if: runner.os == 'Linux'
+        run: |
+          set -eu
+          CGO_ENABLED=0 go build -trimpath -o rg ./cmd/runner-guard
+          ./rg selftest
+          sudo ./rg install
+          sudo ./rg install # reinstall in place
+          for t in run update sample; do systemctl is-enabled "runner-guard-$t.timer"; done
+          # The config holds the webhook URL: root only.
+          test "$(stat -c %a /etc/runner-guard/config.json)" = 600
+          # Non-root: write commands refuse up front, status explains, update --check works.
+          if runner-guard run 2>err.txt; then echo "::error::run worked without root"; exit 1; fi
+          grep -q "needs root" err.txt
+          if runner-guard status 2>err.txt; then echo "::error::status read the root-only config"; exit 1; fi
+          grep -q "readable by root" err.txt
+          runner-guard update --check
+          sudo runner-guard sample
+          sudo runner-guard run
+          sudo test "$(sudo grep -c . /var/lib/runner-guard/history.jsonl)" -ge 2
+          sudo runner-guard status
+          sudo runner-guard status --json | python3 -c 'import json,sys; s=json.load(sys.stdin); assert s["docker_healthy"], s'
+          sudo runner-guard tune
+          sudo runner-guard uninstall
+          for t in run update sample; do if systemctl is-enabled "runner-guard-$t.timer" 2>/dev/null; then echo "::error::$t timer left"; exit 1; fi; done
+      - name: Windows
+        if: runner.os == 'Windows'
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $env:CGO_ENABLED = '0'
+          go build -trimpath -o rg.exe ./cmd/runner-guard
+          if ($LASTEXITCODE) { throw 'build failed' }
+          .\rg.exe selftest; if ($LASTEXITCODE) { throw 'selftest' }
+          .\rg.exe install; if ($LASTEXITCODE) { throw 'install' }
+          .\rg.exe install; if ($LASTEXITCODE) { throw 'reinstall' }
+          $dir = Join-Path $env:ProgramData 'runner-guard'
+          $bin = Join-Path $dir 'runner-guard.exe'
+          foreach ($t in 'runner-guard-run', 'runner-guard-update', 'runner-guard-sample', 'runner-guard-desktop') {
+            schtasks /Query /TN $t | Out-Null
+            if ($LASTEXITCODE) { throw "task $t missing" }
+          }
+          $tr = (schtasks /Query /TN runner-guard-run /V /FO LIST | Select-String 'Task To Run').ToString()
+          if ($tr -notmatch 'conhost.exe --headless') { throw "run task not headless: $tr" }
+          # Install folder: owned by Administrators; Users may not write; config.json not readable by Users.
+          $sid = { param($a) $a.IdentityReference.Translate([Security.Principal.SecurityIdentifier]).Value }
+          $owner = (Get-Acl $dir).GetOwner([Security.Principal.SecurityIdentifier]).Value
+          if ($owner -ne 'S-1-5-32-544') { throw "install folder owner is $owner" }
+          foreach ($a in (Get-Acl $dir).Access) {
+            if ((& $sid $a) -eq 'S-1-5-32-545' -and ([int64]$a.FileSystemRights -band 0x6)) { throw 'Users can write the install folder' }
+          }
+          foreach ($a in (Get-Acl (Join-Path $dir 'config.json')).Access) {
+            if ((& $sid $a) -in 'S-1-5-32-545', 'S-1-5-11', 'S-1-1-0') { throw 'config.json readable by Users' }
+          }
+          & $bin sample; if ($LASTEXITCODE) { throw 'sample' }
+          if (-not (Test-Path (Join-Path $dir 'history.jsonl'))) { throw 'no history' }
+          .\rg-windows.ps1 set reboot_recover false # never reboot a CI runner
+          & $bin run; if ($LASTEXITCODE) { throw 'run' }
+          & $bin status; if ($LASTEXITCODE) { throw 'status' }
+          & $bin tune; if ($LASTEXITCODE) { throw 'tune' }
+          & $bin update --check; if ($LASTEXITCODE) { throw 'update --check' }
+          # The helper script against the same install.
+          .\rg-windows.ps1 preflight
+          .\rg-windows.ps1 set desktop_budget_gb 120
+          .\rg-windows.ps1 set refuse_if_exists '["C:\\no-such-marker"]'
+          $s = & $bin status --json | ConvertFrom-Json
+          if (-not $s.version) { throw 'status --json after set' }
+          .\rg-windows.ps1 tasks
+          .\rg-windows.ps1 pause
+          .\rg-windows.ps1 resume
+          & $bin uninstall; if ($LASTEXITCODE) { throw 'uninstall' }
+          $left = schtasks /Query /FO CSV | Select-String 'runner-guard-run'
+          if ($left) { throw 'task left after uninstall' }
+
+  # This commit's install scripts install the latest signed release: a script
+  # change that breaks download, signature or checksum checks fails here.
+  install-scripts:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Linux
+        if: runner.os == 'Linux'
+        run: |
+          sudo sh install.sh
+          sudo runner-guard version
+          sudo runner-guard uninstall
+      - name: Windows
+        if: runner.os == 'Windows'
+        shell: powershell
+        run: |
+          .\install.ps1
+          $bin = Join-Path $env:ProgramData 'runner-guard\runner-guard.exe'
+          & $bin version
+          & $bin uninstall
+          if ($LASTEXITCODE) { throw 'uninstall failed' }
 
   # Public repo: generic leak patterns only. Private names live in a local
   # pre-commit hook, never in this file.
