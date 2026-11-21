@@ -65,7 +65,10 @@ for asset in runner-guard_linux_amd64 runner-guard_windows_amd64.exe; do
 done
 git show "$commit:rg-windows.ps1" >"$work/local/rg-windows.ps1"
 git show "$commit:docs/windows.md" >"$work/local/runner-guard-windows-guide.md"
-(cd "$work/local" && sha256sum runner-guard_linux_amd64 runner-guard_windows_amd64.exe rg-windows.ps1 runner-guard-windows-guide.md >checksums.txt)
+# Written by hand in GNU's text-mode form: Git Bash's sha256sum marks files " *name".
+for f in runner-guard_linux_amd64 runner-guard_windows_amd64.exe rg-windows.ps1 runner-guard-windows-guide.md; do
+	printf '%s  %s\n' "$(sha256sum <"$work/local/$f" | cut -d' ' -f1)" "$f"
+done >"$work/local/checksums.txt"
 cmp -s "$work/local/checksums.txt" "$work/checksums.txt" ||
 	{ echo "CI's checksums.txt differs from one built here from $tag; not signing" >&2; diff "$work/local/checksums.txt" "$work/checksums.txt" >&2 || true; exit 1; }
 echo "checksums.txt: matches a local rebuild of every published file"
