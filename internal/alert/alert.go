@@ -12,6 +12,9 @@ import (
 	"time"
 )
 
+// client has its own timeout; http.DefaultClient has none.
+var client = &http.Client{Timeout: 15 * time.Second}
+
 // Send POSTs {"text": msg, "content": msg}: Slack-style webhooks read
 // "text", Discord reads "content".
 func Send(ctx context.Context, webhook, msg string) error {
@@ -23,7 +26,7 @@ func Send(ctx context.Context, webhook, msg string) error {
 		return scrub(err)
 	}
 	req.Header.Set("Content-Type", "application/json")
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := client.Do(req)
 	if err != nil {
 		return scrub(err)
 	}

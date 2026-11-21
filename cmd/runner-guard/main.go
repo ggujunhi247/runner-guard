@@ -405,6 +405,12 @@ func doUpdate(ctx context.Context, w io.Writer, checkOnly bool) error {
 		bin = resolved
 	}
 	if !checkOnly { // --check changes nothing, so it needs neither the lock nor root
+		// Only the installed copy, in its admin-only folder, is ever replaced: a
+		// copy in a folder others can write could be swapped between the
+		// checksum check and the swap.
+		if !samePath(bin, config.BinPath()) {
+			return fmt.Errorf("update only replaces the installed %s; run that one, or reinstall with the install script", config.BinPath())
+		}
 		// Same lock as run: never swap the binary mid-run.
 		unlock, err := waitLock(ctx, 30*time.Minute)
 		if err != nil {

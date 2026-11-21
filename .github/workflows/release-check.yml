@@ -35,10 +35,15 @@ jobs:
           mkdir old && cd old
           gh release download "$prev" -R "$GITHUB_REPOSITORY" -p "$asset"
           chmod +x "$asset"
-          echo "before: $(./$asset version)"
-          $sudo env RUNNER_GUARD_GITHUB_TOKEN="$GH_TOKEN" ./$asset update
-          after=$(./$asset version | tr -d '\r')
+          # Like a real host: install the previous release, then let the
+          # installed binary update itself (it refuses to replace any other copy).
+          $sudo ./$asset install
+          if [ "$RUNNER_OS" = "Windows" ]; then bin="$PROGRAMDATA/runner-guard/runner-guard.exe"; else bin=/usr/local/bin/runner-guard; fi
+          echo "before: $("$bin" version)"
+          $sudo env RUNNER_GUARD_GITHUB_TOKEN="$GH_TOKEN" "$bin" update
+          after=$("$bin" version | tr -d '\r')
           echo "after: $after"
+          $sudo "$bin" uninstall
           test "$after" = "$TAG"
 
   # What a new host runs: the install script from this commit installs the

@@ -1,0 +1,27 @@
+# New Go/stdlib vulnerabilities appear without any change here. Weekly, scan
+# main and the binary hosts actually run (the latest release). A failure means
+# "cut a release built with a fixed Go"; GitHub emails the owner.
+name: security-weekly
+on:
+  schedule:
+    - cron: "17 3 * * 1"
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  govulncheck:
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
+        with:
+          go-version: "1.27"
+      - name: source on main
+        run: go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./...
+      - name: binaries of the latest release
+        if: always()
+        run: |
+          gh release download -R "$GITHUB_REPOSITORY" -p 'runner-guard_*' -D rel
+          for b in rel/*; do echo "== $b"; go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 -mode=binary "$b"; done
