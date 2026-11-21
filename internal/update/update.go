@@ -3,6 +3,7 @@
 package update
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -12,6 +13,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"regexp"
 	"runtime"
 	"strconv"
 	"strings"
@@ -68,15 +70,29 @@ func Newer(current, latest string) (bool, error) {
 	return false, nil
 }
 
-// ParseChecksums finds asset's hash in sha256sum output.
+var checksumLine = regexp.MustCompile(`^([0-9a-f]{64}) [ *](\S+)$`)
+
+// ParseChecksums finds asset's hash in sha256sum output. Strict, like
+// `sha256sum --strict`: one malformed line or a second entry for the asset
+// fails, so a line other tools skip can never decide which binary runs.
 func ParseChecksums(text, asset string) (string, error) {
-	for _, line := range strings.Split(text, "\n") {
-		f := strings.Fields(line)
-		if len(f) == 2 && strings.TrimPrefix(f[1], "*") == asset {
-			return strings.ToLower(f[0]), nil
+	var hash string
+	for _, line := range strings.Split(strings.TrimSuffix(text, "\n"), "\n") {
+		m := checksumLine.FindStringSubmatch(line)
+		if m == nil {
+			return "", fmt.Errorf("checksums.txt has a malformed line %q", line)
+		}
+		if m[2] == asset {
+			if hash != "" {
+				return "", fmt.Errorf("checksums.txt lists %s twice", asset)
+			}
+			hash = m[1]
 		}
 	}
-	return "", fmt.Errorf("checksums.txt has no entry for %s", asset)
+	if hash == "" {
+		return "", fmt.Errorf("checksums.txt has no entry for %s", asset)
+	}
+	return hash, nil
 }
 
 func AssetName(goos, goarch string) string {
@@ -99,7 +115,18 @@ func get(ctx context.Context, c *http.Client, url string) (*http.Response, error
 // Check fetches the latest release. It returns ErrSkip when GitHub rate
 // limits us or the release lacks this platform's asset or checksums.txt.
 func Check(ctx context.Context, c *http.Client, apiBase, repo string) (Release, error) {
-	resp, err := get(ctx, c, strings.TrimRight(apiBase, "/")+"/repos/"+repo+"/releases/latest")
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimRight(apiBase, "/")+"/repos/"+repo+"/releases/latest", nil)
+	if err != nil {
+		return Release{}, err
+	}
+	req.Header.Set("User-Agent", "runner-guard/"+Version)
+	// Many hosts behind one address (or a CI runner) share GitHub's 60/h
+	// anonymous limit. Only this explicitly named variable is sent, and only
+	// to the API; the download itself needs no token.
+	if t := os.Getenv("RUNNER_GUARD_GITHUB_TOKEN"); t != "" {
+		req.Header.Set("Authorization", "Bearer "+t)
+	}
+	resp, err := c.Do(req)
 	if err != nil {
 		return Release{}, err
 	}
@@ -149,9 +176,18 @@ func download(ctx context.Context, c *http.Client, url string, w io.Writer) erro
 // verifies again, and rolls back if that second check fails.
 func Apply(ctx context.Context, c *http.Client, rel Release, binPath string, verify func(path string) error) error {
 	asset := AssetName(runtime.GOOS, runtime.GOARCH)
-	var sums strings.Builder
+	var sums, sig bytes.Buffer
 	if err := download(ctx, c, rel.Assets["checksums.txt"], &sums); err != nil {
 		return err
+	}
+	if rel.Assets["checksums.txt.sig"] == "" {
+		return fmt.Errorf("release %s is not signed (no checksums.txt.sig); not installing", rel.Tag)
+	}
+	if err := download(ctx, c, rel.Assets["checksums.txt.sig"], &sig); err != nil {
+		return err
+	}
+	if err := VerifySignature(sums.Bytes(), sig.Bytes()); err != nil {
+		return fmt.Errorf("release %s: %w; not installing", rel.Tag, err)
 	}
 	want, err := ParseChecksums(sums.String(), asset)
 	if err != nil {

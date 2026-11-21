@@ -23,6 +23,24 @@ tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
 curl -fsSL -o "$tmp/$asset" "$base/$asset"
 curl -fsSL -o "$tmp/checksums.txt" "$base/checksums.txt"
+curl -fsSL -o "$tmp/checksums.txt.sig" "$base/checksums.txt.sig"
+# The release key (private half kept off GitHub); same as internal/update.PublicKey.
+cat >"$tmp/release.pem" <<'EOF'
+-----BEGIN PUBLIC KEY-----
+MIIBojANBgkqhkiG9w0BAQEFAAOCAY8AMIIBigKCAYEA4xuHI4gBNCLStJKC0Fc2
+FdwhBJleuR7p9awiT8d8TXJO1zZaWowAhz8nLIwq02NBRXdC8X6MMeBgqA194Llb
+poZk0AulasLIfSLpCq9GfPEjUUfIlwVOoeouROVl2VQJPZs7Sy/iffFaux5uOPJG
+9cLj5XqHiy5q6UnJey7kwyOl7Bi/rblULz95dF37WTmh7Gxikkh5cmXUPig6D82c
+T02YoEvKOLUK6m94KqA1HJ+wLpVrjPQA52u8dyAtr6Dl+ajlnkZH7Pq1tQB4C5RC
+h1NJz75mpBupKgnTqzmrzFEcUZZC3K6pVejeZnBYZRY7j8UCzSqZgyNLBIY+9hLo
+/wIqG4XYPDJ/bVS2vcRAex6YmbnxA9Ur3/14ZBayfEliuIkegDOgm0cza7RuqHK2
+NxtdN4ChKEFWJgjm+Sw7ZMAUDPkTUrmQ29Pyd5HFmwRfWgF9RjEbmD6A5Jf5sgOO
+cZuuc5mziBKQAeDhjaT5nShJ9VkxdIep5m3vx8Cs5bn5AgMBAAE=
+-----END PUBLIC KEY-----
+EOF
+command -v openssl >/dev/null || { echo "runner-guard install: openssl is needed to check the release signature" >&2; exit 1; }
+openssl dgst -sha256 -verify "$tmp/release.pem" -signature "$tmp/checksums.txt.sig" "$tmp/checksums.txt" >/dev/null ||
+	{ echo "runner-guard install: release signature does not match; not installing" >&2; exit 1; }
 (cd "$tmp" && grep " $asset\$" checksums.txt | sha256sum -c -)
 chmod +x "$tmp/$asset"
 "$tmp/$asset" selftest

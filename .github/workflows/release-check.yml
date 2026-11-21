@@ -1,0 +1,101 @@
+# Tests a release once it is published (signed): the previous release's binary
+# updates itself to it, and the install scripts install it on a fresh host.
+name: release-check
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: release tag to test (vX.Y.Z)
+        required: true
+permissions:
+  contents: read
+env:
+  TAG: ${{ github.event.release.tag_name || inputs.tag }}
+jobs:
+  # The real thing: the previous release's binary updates itself to this one.
+  update-smoke:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: previous release binary updates itself
+        run: |
+          prev=$(gh release list -R "$GITHUB_REPOSITORY" --exclude-drafts --exclude-pre-releases --limit 2 --json tagName --jq '.[1].tagName // ""')
+          if [ -z "$prev" ]; then echo "first release; nothing to update from"; exit 0; fi
+          if [ "$RUNNER_OS" = "Windows" ]; then asset=runner-guard_windows_amd64.exe; sudo=""; else asset=runner-guard_linux_amd64; sudo=sudo; fi
+          mkdir old && cd old
+          gh release download "$prev" -R "$GITHUB_REPOSITORY" -p "$asset"
+          chmod +x "$asset"
+          echo "before: $(./$asset version)"
+          $sudo RUNNER_GUARD_GITHUB_TOKEN="$GH_TOKEN" ./$asset update
+          after=$(./$asset version | tr -d '\r')
+          echo "after: $after"
+          test "$after" = "$TAG"
+
+  # What a new host runs: the install script from this commit installs the
+  # release just published; running it again must reinstall in place.
+  install-smoke:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ env.TAG }}
+      - name: install twice, check, uninstall (Linux)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          sudo RG_VERSION="$TAG" sh install.sh
+          sudo RG_VERSION="$TAG" sh install.sh
+          test "$(runner-guard version)" = "$TAG"
+          for t in run update sample; do systemctl is-enabled "runner-guard-$t.timer"; done
+          # Real commands against the runner's Docker (no gitlab-runner here).
+          sudo runner-guard sample
+          sudo runner-guard run
+          sudo test "$(sudo grep -c . /var/lib/runner-guard/history.jsonl)" -ge 2
+          sudo runner-guard status
+          sudo runner-guard tune
+          sudo runner-guard uninstall
+      - name: install twice, check, uninstall (Windows)
+        if: runner.os == 'Windows'
+        shell: powershell
+        run: |
+          $env:RG_VERSION = $env:TAG
+          .\install.ps1
+          .\install.ps1
+          $bin = Join-Path $env:ProgramData 'runner-guard\runner-guard.exe'
+          if ((& $bin version) -ne $env:TAG) { throw 'wrong version installed' }
+          foreach ($t in 'runner-guard-run', 'runner-guard-update', 'runner-guard-sample', 'runner-guard-desktop') {
+            schtasks /Query /TN $t | Out-Null
+            if ($LASTEXITCODE -ne 0) { throw "task $t missing" }
+          }
+          $tr = (schtasks /Query /TN runner-guard-run /V /FO LIST | Select-String 'Task To Run').ToString()
+          if ($tr -notmatch 'conhost.exe --headless') { throw "run task not headless: $tr" }
+          & $bin sample
+          if ($LASTEXITCODE -ne 0) { throw 'sample failed' }
+          $hist = Join-Path $env:ProgramData 'runner-guard\history.jsonl'
+          if (-not (Test-Path $hist)) { throw 'sample wrote no history' }
+          & $bin tune
+          # The helper script drives the same install.
+          .\rg-windows.ps1 preflight
+          .\rg-windows.ps1 set desktop_budget_gb 120
+          .\rg-windows.ps1 set refuse_if_exists '["C:\\no-such-marker"]'
+          .\rg-windows.ps1 status
+          if ($LASTEXITCODE -ne 0) { throw 'status failed after set' }
+          .\rg-windows.ps1 tasks
+          .\rg-windows.ps1 pause
+          .\rg-windows.ps1 resume
+          & $bin uninstall
+          if ($LASTEXITCODE -ne 0) { throw 'uninstall failed' }

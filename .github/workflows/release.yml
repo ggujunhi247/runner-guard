@@ -27,14 +27,17 @@ jobs:
           GOOS=windows GOARCH=amd64 go build -trimpath -ldflags "$LDFLAGS" -o runner-guard_windows_amd64.exe ./cmd/runner-guard
           ./runner-guard_linux_amd64 selftest
           test "$(./runner-guard_linux_amd64 version)" = "$GITHUB_REF_NAME"
-          sha256sum runner-guard_* > checksums.txt
-          cat checksums.txt
+          # checksums.txt (signed later) covers every published file, the helper
+          # script and guide included. scripts/sign-release.sh rebuilds this exact
+          # file from the tag with the same command and signs only if it matches.
+          mkdir dist
+          cp runner-guard_linux_amd64 runner-guard_windows_amd64.exe rg-windows.ps1 dist/
+          cp docs/windows.md dist/runner-guard-windows-guide.md
+          (cd dist && sha256sum runner-guard_linux_amd64 runner-guard_windows_amd64.exe rg-windows.ps1 runner-guard-windows-guide.md > checksums.txt && cat checksums.txt)
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: dist
-          path: |
-            runner-guard_*
-            checksums.txt
+          path: dist/
 
   windows-check:
     needs: build
@@ -54,9 +57,6 @@ jobs:
       contents: write
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          path: src
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: dist
@@ -64,92 +64,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         # The Windows helper and its guide ride along; the updater only takes runner-guard_<os>_<arch>.
         run: |
-          cp src/rg-windows.ps1 .
-          cp src/docs/windows.md runner-guard-windows-guide.md
-          gh release create "$GITHUB_REF_NAME" -R "$GITHUB_REPOSITORY" runner-guard_* checksums.txt rg-windows.ps1 runner-guard-windows-guide.md --generate-notes
-
-  # The real thing: the previous release's binary updates itself to this one.
-  update-smoke:
-    needs: publish
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, windows-latest]
-    runs-on: ${{ matrix.os }}
-    defaults:
-      run:
-        shell: bash
-    env:
-      GH_TOKEN: ${{ github.token }}
-    steps:
-      - name: previous release binary updates itself
-        run: |
-          prev=$(gh release list -R "$GITHUB_REPOSITORY" --exclude-drafts --exclude-pre-releases --limit 2 --json tagName --jq '.[1].tagName // ""')
-          if [ -z "$prev" ]; then echo "first release; nothing to update from"; exit 0; fi
-          if [ "$RUNNER_OS" = "Windows" ]; then asset=runner-guard_windows_amd64.exe; sudo=""; else asset=runner-guard_linux_amd64; sudo=sudo; fi
-          mkdir old && cd old
-          gh release download "$prev" -R "$GITHUB_REPOSITORY" -p "$asset"
-          chmod +x "$asset"
-          echo "before: $(./$asset version)"
-          $sudo ./$asset update
-          after=$(./$asset version | tr -d '\r')
-          echo "after: $after"
-          test "$after" = "$GITHUB_REF_NAME"
-
-  # What a new host runs: the install script from this commit installs the
-  # release just published; running it again must reinstall in place.
-  install-smoke:
-    needs: publish
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, windows-latest]
-    runs-on: ${{ matrix.os }}
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - name: install twice, check, uninstall (Linux)
-        if: runner.os == 'Linux'
-        shell: bash
-        run: |
-          sudo RG_VERSION="$GITHUB_REF_NAME" sh install.sh
-          sudo RG_VERSION="$GITHUB_REF_NAME" sh install.sh
-          test "$(runner-guard version)" = "$GITHUB_REF_NAME"
-          for t in run update sample; do systemctl is-enabled "runner-guard-$t.timer"; done
-          # Real commands against the runner's Docker (no gitlab-runner here).
-          sudo runner-guard sample
-          sudo runner-guard run
-          sudo test "$(sudo grep -c . /var/lib/runner-guard/history.jsonl)" -ge 2
-          sudo runner-guard status
-          sudo runner-guard tune
-          sudo runner-guard uninstall
-      - name: install twice, check, uninstall (Windows)
-        if: runner.os == 'Windows'
-        shell: powershell
-        run: |
-          $env:RG_VERSION = $env:GITHUB_REF_NAME
-          .\install.ps1
-          .\install.ps1
-          $bin = Join-Path $env:ProgramData 'runner-guard\runner-guard.exe'
-          if ((& $bin version) -ne $env:GITHUB_REF_NAME) { throw 'wrong version installed' }
-          foreach ($t in 'runner-guard-run', 'runner-guard-update', 'runner-guard-sample', 'runner-guard-desktop') {
-            schtasks /Query /TN $t | Out-Null
-            if ($LASTEXITCODE -ne 0) { throw "task $t missing" }
-          }
-          $tr = (schtasks /Query /TN runner-guard-run /V /FO LIST | Select-String 'Task To Run').ToString()
-          if ($tr -notmatch 'conhost.exe --headless') { throw "run task not headless: $tr" }
-          & $bin sample
-          if ($LASTEXITCODE -ne 0) { throw 'sample failed' }
-          $hist = Join-Path $env:ProgramData 'runner-guard\history.jsonl'
-          if (-not (Test-Path $hist)) { throw 'sample wrote no history' }
-          & $bin tune
-          # The helper script drives the same install.
-          .\rg-windows.ps1 preflight
-          .\rg-windows.ps1 set desktop_budget_gb 120
-          .\rg-windows.ps1 set refuse_if_exists '["C:\\no-such-marker"]'
-          .\rg-windows.ps1 status
-          if ($LASTEXITCODE -ne 0) { throw 'status failed after set' }
-          .\rg-windows.ps1 tasks
-          .\rg-windows.ps1 pause
-          .\rg-windows.ps1 resume
-          & $bin uninstall
-          if ($LASTEXITCODE -ne 0) { throw 'uninstall failed' }
+          # A draft: hosts only accept a release signed with the key kept off GitHub.
+          # The maintainer runs scripts/sign-release.sh, which checks, signs and publishes;
+          # release-check.yml then tests the published release.
+          gh release create "$GITHUB_REF_NAME" -R "$GITHUB_REPOSITORY" --draft runner-guard_* checksums.txt rg-windows.ps1 runner-guard-windows-guide.md --generate-notes

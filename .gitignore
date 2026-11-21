@@ -52,3 +52,6 @@ history.jsonl
 history.jsonl.new
 wslconfig.last-good
 tune.disabled
+# Release signing keys never live in the repo (they are in C:\Secrets\runner-guard).
+*.pem
+*.key
