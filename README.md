@@ -262,7 +262,8 @@ gh pr create --fill          # 저장소 주인의 PR은 자동 머지가 켜짐
   - 머지된 브랜치는 지워집니다.
 - **자동 머지 대상** (`.github/workflows/automerge.yml`):
   - 저장소 주인이 이 저장소 브랜치에서 연 PR. draft이거나 `no-automerge` 라벨이 있으면 제외합니다.
-  - **보안에 민감한 파일**(워크플로, `internal/policy`, `internal/update`, `internal/fsx`, 설치·서명 스크립트, `SECURITY.md`)을 고친 PR은 자동으로 머지하지 않습니다. 검사가 통과한 뒤 사람이 `gh pr merge --rebase`로 머지합니다.
+  - **보안에 민감한 파일**(워크플로, `internal/policy`, `internal/update`, `internal/fsx`, 설치·서명 스크립트, `SECURITY.md`)을 고친 PR은 바로 머지하지 않습니다. 저장소 주인이 내용을 본 뒤 `reviewed` 라벨을 붙이면, 검사가 통과하는 대로 워크플로가 머지합니다. 라벨을 붙인 뒤 새 커밋이 오면 라벨이 자동으로 떨어져 다시 봐야 합니다.
+  - **손으로 머지하지 마세요**(`gh pr merge`, 웹의 Merge 버튼). 머지한 사람의 계정 이메일이 커밋에 committer로 남고, 공개 저장소와 바꿀 수 없는 릴리스에 그대로 남습니다.
   - Dependabot의 Actions 업데이트(매주 한 PR로 묶음). 새 버전이 나온 지 7일이 지나야 제안합니다. 탈취된 릴리스가 보통 그 안에 드러나기 때문입니다. major 버전은 사람이 보도록 댓글만 남깁니다.
 - 자동 머지를 멈추려면 PR에 `no-automerge` 라벨을 붙이거나 `gh pr merge --disable-auto`를 실행합니다.
 - 릴리스는 자동이 아닙니다. 머지 뒤 `main`에서 태그를 push하고 서명합니다(아래).

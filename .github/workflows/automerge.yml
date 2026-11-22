@@ -2,11 +2,15 @@
 # (rebase, keeping each commit's author) once the checks required on main pass.
 # - the owner's PRs from this repo, unless draft, labelled "no-automerge", or
 #   touching security-sensitive paths (workflows, policy, updater, installers...)
+#   until the owner adds the "reviewed" label. The merge is then still done by
+#   this workflow's token, never by hand: a person merging records their
+#   account email as committer (public, and kept forever by immutable tags).
+#   New commits after the label remove it, so a review covers one head.
 # - Dependabot action updates, except major versions (left for a person)
 name: automerge
 on:
   pull_request:
-    types: [opened, reopened, ready_for_review, synchronize, unlabeled]
+    types: [opened, reopened, ready_for_review, synchronize, labeled, unlabeled]
 
 permissions:
   contents: read
@@ -30,6 +34,7 @@ jobs:
       ACTION: ${{ github.event.action }}
       NUM: ${{ github.event.pull_request.number }}
       REPO: ${{ github.repository }}
+      REVIEWED: ${{ contains(github.event.pull_request.labels.*.name, 'reviewed') }}
     steps:
       - id: meta
         if: github.event.pull_request.user.login == 'dependabot[bot]'
@@ -47,12 +52,21 @@ jobs:
           # The files API lists old names of renamed files too, up to 3000 files.
           gh api "repos/$REPO/pulls/$NUM/files" --paginate -q '.[] | .filename, (.previous_filename // empty)' > files.txt
           if grep -qE '^(\.github/|internal/policy/|internal/update/|internal/fsx/|internal/schedule/|cmd/runner-guard/|cmd/rgsign/|scripts/|install\.sh$|install\.ps1$|rg-windows\.ps1$|go\.mod$|go\.sum$|SECURITY\.md$)' files.txt; then
+            if [ "$ACTION" = synchronize ] && [ "$REVIEWED" = true ]; then
+              # A review covers the commits it saw, not ones pushed after it.
+              gh pr edit "$PR" --remove-label reviewed
+              REVIEWED=false
+              gh pr comment "$PR" --body "New commits after review - the reviewed label was removed; review again."
+            fi
+            if [ "$REVIEWED" = true ]; then
+              exit 0 # the owner reviewed this head (only the owner can trigger this job)
+            fi
             echo "sensitive=true" >> "$GITHUB_OUTPUT"
             if [ "$(gh pr view "$PR" --json autoMergeRequest -q '.autoMergeRequest != null')" = true ]; then
               gh pr merge "$PR" --disable-auto
             fi
             if [ "$ACTION" = opened ]; then
-              gh pr comment "$PR" --body "This PR touches security-sensitive paths - no auto-merge; review and merge by hand."
+              gh pr comment "$PR" --body "This PR touches security-sensitive paths - no auto-merge. Review it, then add the reviewed label; never merge by hand (that records your account email as committer)."
             fi
           fi
       - name: enable auto-merge
