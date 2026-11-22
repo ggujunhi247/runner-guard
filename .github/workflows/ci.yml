@@ -209,7 +209,9 @@ jobs:
           if git ls-files -z | xargs -0 grep -nIoE '[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[a-z]{2,}' | grep -v 'noreply' | cut -d: -f1,2 | grep .; then echo "::error::email address in tracked files (file:line above)"; status=1; fi
           # Real commits only: GitHub's own test-merge commit for a PR (refs/remotes/pull/*)
           # carries the account email and never lands in the repo.
-          bad=$(git log --format='%h %ae%n%h %ce' "$REV" --remotes=origin --tags | grep -v 'noreply' | cut -d' ' -f1 | sort -u | tr '\n' ' ' || true)
+          # .github/leak-scan-allow: commits already public that cannot be changed
+          # (full SHA + reason); anything new still fails.
+          bad=$(git log --format='%H %ae%n%H %ce' "$REV" --remotes=origin --tags | grep -v 'noreply' | cut -d' ' -f1 | sort -u | grep -vxF -f <(grep -oE '^[0-9a-f]{40}' .github/leak-scan-allow) | tr '\n' ' ' || true)
           if [ -n "$bad" ]; then echo "::error::commit(s) with a non-noreply email: $bad"; status=1; fi
           exit $status
 

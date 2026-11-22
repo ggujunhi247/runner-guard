@@ -391,12 +391,26 @@ func TestAutomergeSkipsSensitivePaths(t *testing.T) {
 	wf := read(t, ".github/workflows/automerge.yml")
 	for _, p := range []string{`\.github/`, "internal/policy/", "internal/update/", "internal/fsx/", "internal/schedule/",
 		"cmd/runner-guard/", "cmd/rgsign/", "scripts/", `install\.sh`, `install\.ps1`, `rg-windows\.ps1`, `go\.mod`, `SECURITY\.md`,
-		"previous_filename", "shell: bash"} {
+		"previous_filename", "shell: bash", "reviewed", "--remove-label reviewed"} {
 		if !strings.Contains(wf, p) {
 			t.Errorf("automerge.yml does not guard %s", p)
 		}
 	}
 	if !strings.Contains(wf, "github.actor == github.repository_owner") {
 		t.Error("automerge.yml does not require the actor to be the owner or Dependabot")
+	}
+}
+
+// The leak-scan allowlist names only full commit SHAs, each with a reason, so
+// it cannot quietly grow into "allow everything".
+func TestLeakScanAllowlist(t *testing.T) {
+	for i, l := range strings.Split(strings.TrimSpace(read(t, ".github/leak-scan-allow")), "\n") {
+		l = strings.TrimSpace(l)
+		if l == "" || strings.HasPrefix(l, "#") {
+			continue
+		}
+		if !regexp.MustCompile(`^[0-9a-f]{40} \S.{10,}$`).MatchString(l) {
+			t.Errorf("leak-scan-allow line %d: want '<full sha> <reason>', got %q", i+1, l)
+		}
 	}
 }
