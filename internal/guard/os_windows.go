@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/ggujunhi247/runner-guard/internal/dockerctl"
+	"github.com/ggujunhi247/runner-guard/internal/fsx"
 	"github.com/ggujunhi247/runner-guard/internal/runnersvc"
 	"github.com/ggujunhi247/runner-guard/internal/state"
 	"github.com/ggujunhi247/runner-guard/internal/tune"
@@ -94,9 +95,22 @@ func applyWSL(ctx context.Context, d Deps, st *state.State, key string, gb int, 
 		return errBusy
 	}
 	if existed {
-		os.WriteFile(filepath.Join(filepath.Dir(d.HistoryPath), "wslconfig.last-good"), old, 0o644)
+		if err := fsx.WriteFile(lastGood(d), old, 0o644); err != nil {
+			return fmt.Errorf("back up .wslconfig: %w", err)
+		}
 	}
-	if err := os.WriteFile(path, edited, 0o644); err != nil {
+	// Recorded before the write: a run that finds it set restores the old file.
+	st.PendingWSLKey, st.PendingWSLPath, st.PendingWSLExisted = key, path, existed
+	if err := state.Save(d.StatePath, *st); err != nil {
+		st.PendingWSLKey, st.PendingWSLPath = "", ""
+		return fmt.Errorf("save state before changing .wslconfig: %w", err)
+	}
+	done := func() error {
+		st.PendingWSLKey, st.PendingWSLPath, st.PendingWSLExisted = "", "", false
+		return state.Save(d.StatePath, *st)
+	}
+	if err := fsx.WriteFile(path, edited, 0o644); err != nil {
+		done()
 		return err
 	}
 	verr := restartVM(ctx, d)
@@ -111,17 +125,73 @@ func applyWSL(ctx context.Context, d Deps, st *state.State, key string, gb int, 
 		}
 	}
 	if verr == nil {
-		return nil
+		// Saved now, not at the end of Run: a later crash must not undo a verified change.
+		return done()
 	}
+	var rerr error
 	if existed {
-		os.WriteFile(path, old, 0o644)
-	} else {
-		os.Remove(path)
+		rerr = fsx.WriteFile(path, old, 0o644)
+	} else if rerr = os.Remove(path); os.IsNotExist(rerr) {
+		rerr = nil
 	}
+	if rerr != nil { // Pending stays set: the next run tries the restore again
+		return fmt.Errorf("%v; putting the old .wslconfig back failed: %v", verr, rerr)
+	}
+	done()
 	if err := restartVM(ctx, d); err != nil {
 		verr = fmt.Errorf("%v; restoring the old .wslconfig also failed: %v", verr, err)
 	}
 	return verr
+}
+
+func lastGood(d Deps) string {
+	return filepath.Join(filepath.Dir(d.HistoryPath), "wslconfig.last-good")
+}
+
+// resumeWSL finishes a .wslconfig change that a crash interrupted: the
+// unverified file goes, the old one comes back, the VM restarts, and that knob
+// is frozen so the same change is not tried again without a person.
+func resumeWSL(ctx context.Context, d Deps, st *state.State) []string {
+	if st.PendingWSLPath == "" {
+		return nil
+	}
+	path, key := st.PendingWSLPath, st.PendingWSLKey
+	var err error
+	if st.PendingWSLExisted {
+		var old []byte
+		if old, err = os.ReadFile(lastGood(d)); err == nil {
+			err = fsx.WriteFile(path, old, 0o644)
+		}
+	} else if err = os.Remove(path); os.IsNotExist(err) {
+		err = nil
+	}
+	k := &st.WSLMemoryGB
+	if key == "swap" {
+		k = &st.WSLSwapGB
+	}
+	k.Frozen = true
+	if err != nil { // stays pending: tried again next run
+		return []string{fmt.Sprintf("a .wslconfig %s change was interrupted and the old file could not be put back yet (%v); will retry; check %s; wsl_%s tuning frozen", key, err, path, key)}
+	}
+	st.PendingWSLKey, st.PendingWSLPath, st.PendingWSLExisted = "", "", false
+	msg := fmt.Sprintf("a .wslconfig %s change was interrupted; put the old file back", key)
+	frozen := fmt.Sprintf("; wsl_%s tuning frozen until runner-guard tune --reset", key)
+	// The restart kills every job in the VM: only when idle, with the runner
+	// stopped the recorded way (the next run starts it once Docker answers).
+	// Otherwise the old file simply takes effect at the next WSL restart.
+	if tune.RunningJobs(ctx, d.R) != 0 {
+		return []string{msg + " (takes effect at the next WSL restart; jobs are running)" + frozen}
+	}
+	if running, _, err := runnersvc.Status(ctx, d.R, d.Cfg.RunnerService); err != nil || running {
+		if err != nil || d.stopRunner(ctx, st, runnersvc.ReasonTune, d.Now()) != nil || tune.RunningJobs(ctx, d.R) != 0 {
+			return []string{msg + " (takes effect at the next WSL restart)" + frozen}
+		}
+	}
+	st.LastDisruptive = d.Now()
+	if err := restartVM(ctx, d); err != nil {
+		msg += fmt.Sprintf(", but restarting WSL failed: %v", err)
+	}
+	return []string{msg + frozen}
 }
 
 // canReboot: the scheduled tasks need a logged-on user, so a reboot only

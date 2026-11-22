@@ -125,6 +125,7 @@ schtasks /Query /TN runner-guard-run /V /FO LIST | Select-String 'Run As User|St
 ```
 
 - 설치는 `%ProgramData%\runner-guard`의 소유자를 Administrators로 바꾸고, 관리자와 SYSTEM만 쓸 수 있게 합니다. `config.json`(웹훅 URL)은 관리자만 읽을 수 있습니다. 그래서 `status`, `tune`, `config`도 관리자 PowerShell에서 실행합니다.
+- `& $rg doctor`를 실행해서 `FAIL` 줄이 없어야 합니다. WSL 변경, 복구 재부팅, 예약 작업 계정, Docker Desktop 자동 시작이 실제로 될지 읽기만 해서 확인합니다.
 - `status` 끝에 `PROBLEM:` 줄이 없어야 합니다. 있으면 그 줄이 시키는 대로 고칩니다. [문제 해결](#4-문제-해결)도 보세요.
 - "Run As User"가 Docker Desktop을 쓰는 사용자여야 합니다.
 - 바로 한 번 돌려 보려면 `& $rg run`을 실행합니다. 매시간 하는 일을 지금 한 번 합니다. 디스크가 기준 미만이면 아무것도 지우지 않습니다.

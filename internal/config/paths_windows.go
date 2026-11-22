@@ -19,6 +19,8 @@ func BinPath() string { return filepath.Join(Dir(), "runner-guard.exe") }
 // build cache, and give freed space back to the drive.
 func osDefaults(c *Config) {
 	c.PruneImages = true
+	c.PruneTestcontainers = true
+	c.PruneDeep = true
 	c.DesktopReclaim = true
 	c.RunnerConfig = `C:\GitLab-Runner\config.toml`
 	// Only after Docker stays dead through restarts and a WSL restart, at

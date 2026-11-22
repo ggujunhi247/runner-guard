@@ -108,6 +108,9 @@ jobs:
           sudo runner-guard status
           sudo runner-guard status --json | python3 -c 'import json,sys; s=json.load(sys.stdin); assert s["docker_healthy"], s'
           sudo runner-guard tune
+          # doctor only reads; on a CI runner without gitlab-runner it must still run every check.
+          sudo runner-guard doctor | tee doctor.txt || true
+          grep -q "docker answers" doctor.txt && grep -q "timer runner-guard-run" doctor.txt
           sudo runner-guard uninstall
           for t in run update sample; do if systemctl is-enabled "runner-guard-$t.timer" 2>/dev/null; then echo "::error::$t timer left"; exit 1; fi; done
       - name: Windows
@@ -146,6 +149,8 @@ jobs:
           & $bin status; if ($LASTEXITCODE) { throw 'status' }
           & $bin tune; if ($LASTEXITCODE) { throw 'tune' }
           & $bin update --check; if ($LASTEXITCODE) { throw 'update --check' }
+          $doc = (& $bin doctor) -join "`n"
+          if ($doc -notmatch 'docker answers' -or $doc -notmatch 'task runner-guard-run') { throw "doctor output: $doc" }
           # The helper script against the same install.
           .\rg-windows.ps1 preflight
           .\rg-windows.ps1 set desktop_budget_gb 120

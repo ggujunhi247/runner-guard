@@ -1,6 +1,7 @@
 # Turns on auto-merge for PRs that may merge themselves. GitHub then merges
 # (rebase, keeping each commit's author) once the checks required on main pass.
-# - the owner's PRs from this repo, unless draft or labelled "no-automerge"
+# - the owner's PRs from this repo, unless draft, labelled "no-automerge", or
+#   touching security-sensitive paths (workflows, policy, updater, installers...)
 # - Dependabot action updates, except major versions (left for a person)
 name: automerge
 on:
@@ -8,14 +9,17 @@ on:
     types: [opened, reopened, ready_for_review, synchronize, unlabeled]
 
 permissions:
-  contents: write
-  pull-requests: write
+  contents: read
 
 jobs:
   enable:
+    permissions:
+      contents: write
+      pull-requests: write
     if: >-
       !github.event.pull_request.draft &&
       github.event.pull_request.head.repo.full_name == github.repository &&
+      (github.actor == github.repository_owner || github.actor == 'dependabot[bot]') &&
       !contains(github.event.pull_request.labels.*.name, 'no-automerge') &&
       (github.event.pull_request.user.login == github.repository_owner ||
        github.event.pull_request.user.login == 'dependabot[bot]')
@@ -23,6 +27,9 @@ jobs:
     env:
       GH_TOKEN: ${{ github.token }}
       PR: ${{ github.event.pull_request.html_url }}
+      ACTION: ${{ github.event.action }}
+      NUM: ${{ github.event.pull_request.number }}
+      REPO: ${{ github.repository }}
     steps:
       - id: meta
         if: github.event.pull_request.user.login == 'dependabot[bot]'
@@ -30,6 +37,24 @@ jobs:
       - name: leave major updates to a person
         if: steps.meta.outputs.update-type == 'version-update:semver-major' && github.event.action == 'opened'
         run: gh pr comment "$PR" --body "Major version update - review the release notes and merge by hand."
+      - name: keep security-sensitive owner changes for a person
+        id: paths
+        if: github.event.pull_request.user.login == github.repository_owner
+        # bash = -eo pipefail: if listing the files fails, the step fails and
+        # auto-merge is never enabled (fail closed).
+        shell: bash
+        run: |
+          # The files API lists old names of renamed files too, up to 3000 files.
+          gh api "repos/$REPO/pulls/$NUM/files" --paginate -q '.[] | .filename, (.previous_filename // empty)' > files.txt
+          if grep -qE '^(\.github/|internal/policy/|internal/update/|internal/fsx/|internal/schedule/|cmd/runner-guard/|cmd/rgsign/|scripts/|install\.sh$|install\.ps1$|rg-windows\.ps1$|go\.mod$|go\.sum$|SECURITY\.md$)' files.txt; then
+            echo "sensitive=true" >> "$GITHUB_OUTPUT"
+            if [ "$(gh pr view "$PR" --json autoMergeRequest -q '.autoMergeRequest != null')" = true ]; then
+              gh pr merge "$PR" --disable-auto
+            fi
+            if [ "$ACTION" = opened ]; then
+              gh pr comment "$PR" --body "This PR touches security-sensitive paths - no auto-merge; review and merge by hand."
+            fi
+          fi
       - name: enable auto-merge
-        if: steps.meta.outputs.update-type != 'version-update:semver-major'
+        if: steps.meta.outputs.update-type != 'version-update:semver-major' && steps.paths.outputs.sensitive != 'true'
         run: gh pr merge "$PR" --auto --rebase

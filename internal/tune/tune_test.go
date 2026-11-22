@@ -274,3 +274,11 @@ func TestOwnWSLChangeIsNotAHandEdit(t *testing.T) {
 		t.Fatalf("recorded %v but wrote %d", c.To, int(c.To))
 	}
 }
+
+// Regression (FuzzSetWSL): a capitalised key is replaced, not shadowed.
+func TestSetWSLReplacesCapitalisedKey(t *testing.T) {
+	out, err := SetWSL([]byte("[wsl2]\r\nMemory = 512MB\r\n"), "memory", 3)
+	if err != nil || WSLValue(out, "memory") != 3 || strings.Count(strings.ToLower(string(out)), "memory") != 1 {
+		t.Fatalf("%q %v", out, err)
+	}
+}

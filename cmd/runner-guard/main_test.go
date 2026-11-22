@@ -4,15 +4,18 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/ggujunhi247/runner-guard/internal/config"
 	"github.com/ggujunhi247/runner-guard/internal/execx"
 	"github.com/ggujunhi247/runner-guard/internal/guard"
+	"github.com/ggujunhi247/runner-guard/internal/state"
 )
 
 func TestStatusJSON(t *testing.T) {
@@ -58,5 +61,22 @@ func TestNeedsRootOnlyForWritingCommands(t *testing.T) {
 		if got := needsRoot(c.cmd, c.check, c.reset) != ""; got != c.want {
 			t.Errorf("%s check=%v reset=%v: needs root %v, want %v", c.cmd, c.check, c.reset, got, c.want)
 		}
+	}
+}
+
+func TestUpdateFailuresAlertOnTheThird(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "state.json")
+	var sent []string
+	send := func(m string) error { sent = append(sent, m); return nil }
+	for i := 0; i < 4; i++ {
+		noteUpdate(p, errors.New("checksums.txt signature does not match"), send)
+	}
+	st, _ := state.Load(p)
+	if st.UpdateFailures != 4 || len(sent) != 1 || !strings.Contains(sent[0], "3 times") {
+		t.Fatalf("failures %d, alerts %q", st.UpdateFailures, sent)
+	}
+	noteUpdate(p, nil, send)
+	if st, _ := state.Load(p); st.UpdateFailures != 0 || st.LastUpdateError != "" {
+		t.Fatalf("not reset: %+v", st)
 	}
 }

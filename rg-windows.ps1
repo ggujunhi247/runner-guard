@@ -108,6 +108,7 @@ switch ($Command) {
         Write-Host 'Next: .\rg-windows.ps1 status   (fix any PROBLEM lines before the first run, 15 min after install)'
     }
     'status' { Invoke-RG status }
+    'doctor' { Invoke-RG doctor }
     'run' { Assert-Admin; Invoke-RG run }
     'tune' { Invoke-RG tune }
     'tune-reset' { Assert-Admin; Invoke-RG tune --reset }
@@ -175,6 +176,7 @@ runner-guard helper (guide: docs/windows.md in github.com/ggujunhi247/runner-gua
   nosleep              turn off sleep and hibernate
   install [vX.Y.Z]     install, reinstall or upgrade (latest, or that version)
   status               state and PROBLEM lines
+  doctor               read-only check that restarts, WSL changes, reboot recovery would work
   log [N]              last N log lines (50)
   tasks                scheduled task status
   run                  run the hourly check now

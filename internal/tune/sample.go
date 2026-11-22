@@ -18,6 +18,7 @@ import (
 	"github.com/ggujunhi247/runner-guard/internal/disk"
 	"github.com/ggujunhi247/runner-guard/internal/dockerctl"
 	"github.com/ggujunhi247/runner-guard/internal/execx"
+	"github.com/ggujunhi247/runner-guard/internal/fsx"
 	"github.com/ggujunhi247/runner-guard/internal/pressure"
 	"github.com/ggujunhi247/runner-guard/internal/runnersvc"
 	"github.com/ggujunhi247/runner-guard/internal/state"
@@ -269,15 +270,5 @@ func Rewrite(path string, h []Sample) error {
 		}
 		buf.Write(append(b, '\n'))
 	}
-	tmp := path + ".new"
-	if err := os.WriteFile(tmp, buf.Bytes(), 0o644); err != nil {
-		return err
-	}
-	// Windows refuses to replace a file another process (sample) has open.
-	err := os.Rename(tmp, path)
-	for i := 0; err != nil && i < 5; i++ {
-		time.Sleep(time.Second)
-		err = os.Rename(tmp, path)
-	}
-	return err
+	return fsx.WriteFile(path, buf.Bytes(), 0o644)
 }

@@ -21,7 +21,9 @@ import (
 	"github.com/ggujunhi247/runner-guard/internal/config"
 	"github.com/ggujunhi247/runner-guard/internal/disk"
 	"github.com/ggujunhi247/runner-guard/internal/dockerctl"
+	"github.com/ggujunhi247/runner-guard/internal/doctor"
 	"github.com/ggujunhi247/runner-guard/internal/execx"
+	"github.com/ggujunhi247/runner-guard/internal/fsx"
 	"github.com/ggujunhi247/runner-guard/internal/guard"
 	"github.com/ggujunhi247/runner-guard/internal/runnersvc"
 	"github.com/ggujunhi247/runner-guard/internal/schedule"
@@ -38,6 +40,8 @@ const usage = `usage: runner-guard <command>
   sample                   record one usage sample (scheduled every 5 min)
   tune [--reset]           show what the daily tune would change; --reset
                            forgets learned values, ceilings and freezes
+  doctor                   check, read-only, that restarts, WSL changes, recovery
+                           reboot and tasks would work here (run on every new host)
   install                  copy binary, write default config, schedule run/update
   uninstall                remove the scheduled tasks (config and logs stay)
   selftest                 check built-in decision logic
@@ -118,6 +122,11 @@ func realMain(args []string) int {
 		var d guard.Deps
 		if d, err = deps(ctx, os.Stdout); err == nil {
 			err = doTune(d, *reset, os.Stdout)
+		}
+	case "doctor":
+		var d guard.Deps
+		if d, err = deps(ctx, os.Stdout); err == nil && doctor.Print(os.Stdout, doctor.Run(ctx, d)) {
+			err = errors.New("doctor found problems (FAIL lines above)")
 		}
 	case "install":
 		err = doInstall(ctx)
@@ -384,7 +393,7 @@ func runStatus(ctx context.Context, d guard.Deps, asJSON bool, w io.Writer) erro
 	return nil
 }
 
-func doUpdate(ctx context.Context, w io.Writer, checkOnly bool) error {
+func doUpdate(ctx context.Context, w io.Writer, checkOnly bool) (rerr error) {
 	logf := func(format string, a ...any) { guard.Logf(w, time.Now(), format, a...) }
 	cfg, err := config.Load(config.File())
 	if errors.Is(err, os.ErrPermission) && checkOnly {
@@ -417,6 +426,15 @@ func doUpdate(ctx context.Context, w io.Writer, checkOnly bool) error {
 			return err
 		}
 		defer unlock()
+		// Runs before unlock (defers are LIFO), so state.json is written under the lock.
+		defer func() {
+			noteUpdate(statePath(), rerr, func(msg string) error {
+				if cfg.AlertWebhook == "" {
+					return nil
+				}
+				return alert.Send(ctx, cfg.AlertWebhook, msg)
+			})
+		}()
 		update.Cleanup(bin)
 	}
 
@@ -466,6 +484,32 @@ func doUpdate(ctx context.Context, w io.Writer, checkOnly bool) error {
 	return nil
 }
 
+// noteUpdate counts self-updates that failed in a row (a bad signature, a
+// broken download, a rollback). The third alerts: a fleet that silently stops
+// updating also stops getting every later fix.
+func noteUpdate(path string, uerr error, send func(string) error) {
+	st, warn := state.Load(path)
+	if warn != "" {
+		return // unreadable state: saving would wipe BlockedByUs and the rest
+	}
+	if uerr == nil {
+		if st.UpdateFailures == 0 {
+			return
+		}
+		st.UpdateFailures, st.LastUpdateError = 0, ""
+	} else {
+		st.UpdateFailures++
+		st.LastUpdateError = uerr.Error()
+		if st.UpdateFailures == 3 {
+			host, _ := os.Hostname()
+			if err := send(fmt.Sprintf("[runner-guard] %s: self-update failed 3 times in a row: %v", host, uerr)); err != nil {
+				fmt.Fprintln(os.Stderr, "[runner-guard] alert:", err)
+			}
+		}
+	}
+	state.Save(path, st)
+}
+
 func doInstall(ctx context.Context) error {
 	src, err := os.Executable()
 	if err != nil {
@@ -473,6 +517,14 @@ func doInstall(ctx context.Context) error {
 	}
 	bin := config.BinPath()
 	for _, dir := range []string{filepath.Dir(bin), config.Dir(), filepath.Dir(config.File())} {
+		// Only folders that are ours: on Linux the binary goes into the shared
+		// /usr/local/bin, which some distros make group-writable (root:staff).
+		ours := dir == config.Dir() || dir == filepath.Dir(config.File())
+		if _, err := os.Stat(dir); err == nil && ours {
+			if err := schedule.TrustedOwner(dir); err != nil {
+				return err
+			}
+		}
 		if err := os.MkdirAll(dir, 0o755); err != nil {
 			return fmt.Errorf("%w (run as root/administrator)", err)
 		}
@@ -494,7 +546,7 @@ func doInstall(ctx context.Context) error {
 	}
 	if _, err := os.Stat(config.File()); os.IsNotExist(err) {
 		b, _ := json.MarshalIndent(config.Default(), "", "  ")
-		if err := os.WriteFile(config.File(), append(b, '\n'), 0o600); err != nil {
+		if err := fsx.WriteFile(config.File(), append(b, '\n'), 0o600); err != nil {
 			return err
 		}
 	}
@@ -618,6 +670,9 @@ func statusTune(ctx context.Context, d guard.Deps, st state.State, s *statusRepo
 			fix += " or raise desktop_budget_gb"
 		}
 		s.Problems = append(s.Problems, fmt.Sprintf("disk %.0f%% >= block_percent %g: run stops the runner until it falls below %g%%; %s", s.DiskPercent, d.Cfg.BlockPercent, guard.PrunePercent(d, st), fix))
+	}
+	if st.UpdateFailures >= 3 {
+		s.Problems = append(s.Problems, fmt.Sprintf("self-update failed %d times in a row (last: %s); no later fixes arrive until it works", st.UpdateFailures, st.LastUpdateError))
 	}
 	if d.Cfg.RebootRecover {
 		if err := guard.CanReboot(ctx, d); err != nil {

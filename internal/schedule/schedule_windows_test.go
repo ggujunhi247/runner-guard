@@ -62,3 +62,19 @@ func TestSecureDirTakesOwnershipBeforeGranting(t *testing.T) {
 		t.Fatalf("calls %q", f.Calls)
 	}
 }
+
+func TestTrustedOwner(t *testing.T) {
+	for _, c := range []struct {
+		sid, me string
+		want    bool
+	}{{"S-1-5-32-544", "", true}, {"S-1-5-18", "", true}, {"S-1-5-21-1-2-3-1001", "S-1-5-21-1-2-3-1001", true},
+		{"S-1-5-21-1-2-3-1002", "S-1-5-21-1-2-3-1001", false}, {"S-1-5-32-545", "", false}} {
+		if got := trustedSID(c.sid, c.me); got != c.want {
+			t.Errorf("%s (me %s): %v", c.sid, c.me, got)
+		}
+	}
+	// A folder this test made is owned by the current user (or Administrators): trusted.
+	if err := TrustedOwner(t.TempDir()); err != nil {
+		t.Fatal(err)
+	}
+}
