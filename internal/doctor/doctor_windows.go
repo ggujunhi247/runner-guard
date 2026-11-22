@@ -101,9 +101,12 @@ func osChecks(ctx context.Context, d guard.Deps) []Check {
 		add(Warn, "Docker Desktop starts at sign-in", "could not confirm from settings-store.json; check the setting")
 	}
 
-	if err := schedule.TrustedOwner(config.Dir()); err != nil && !os.IsNotExist(err) {
+	// Stat first: TrustedOwner wraps the Windows error, which os.IsNotExist does not unwrap.
+	if _, err := os.Stat(config.Dir()); err != nil {
+		add(Warn, "install folder", config.Dir()+" does not exist yet; run install")
+	} else if err := schedule.TrustedOwner(config.Dir()); err != nil {
 		add(Fail, "install folder owner", err.Error())
-	} else if err == nil {
+	} else {
 		add(Pass, "install folder owner", "Administrators/SYSTEM/you")
 	}
 	return out

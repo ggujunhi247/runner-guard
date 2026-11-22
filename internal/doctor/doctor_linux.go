@@ -27,9 +27,11 @@ func osChecks(ctx context.Context, d guard.Deps) []Check {
 		add(Pass, "recovery reboot", "off (reboot_recover false)")
 	}
 	for _, dir := range []string{config.Dir(), filepath.Dir(config.File())} {
-		if err := schedule.TrustedOwner(dir); err != nil && !os.IsNotExist(err) {
+		if _, err := os.Stat(dir); err != nil {
+			add(Warn, dir, "does not exist yet; run install")
+		} else if err := schedule.TrustedOwner(dir); err != nil {
 			add(Fail, "owner of "+dir, err.Error())
-		} else if err == nil {
+		} else {
 			add(Pass, "owner of "+dir, "root only")
 		}
 	}
