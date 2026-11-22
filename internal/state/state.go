@@ -31,6 +31,14 @@ type State struct {
 	LastWSLRecover time.Time   `json:"last_wsl_recover"`
 	BlockedAt      time.Time   `json:"blocked_at"`
 	LastRemind     time.Time   `json:"last_remind"` // last "still broken" alert
+	// Self-updates that failed in a row, and the last error (status, alert at 3).
+	UpdateFailures int `json:"update_failures,omitempty"`
+	// A .wslconfig change written but not yet verified. If a run finds it set,
+	// the change was interrupted (crash, power, kill): put the old file back.
+	PendingWSLKey     string `json:"pending_wsl_key,omitempty"` // "memory" or "swap"
+	PendingWSLPath    string `json:"pending_wsl_path,omitempty"`
+	PendingWSLExisted bool   `json:"pending_wsl_existed,omitempty"`
+	LastUpdateError   string `json:"last_update_error,omitempty"`
 }
 
 // Knob is one auto-tuned setting. Value 0 means "never changed by us".

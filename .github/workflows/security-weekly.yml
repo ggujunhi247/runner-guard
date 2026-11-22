@@ -1,5 +1,6 @@
 # New Go/stdlib vulnerabilities appear without any change here. Weekly, scan
-# main and the binary hosts actually run (the latest release). A failure means
+# main and the binary hosts actually run (the latest release), and fuzz the
+# parsers. A failure means
 # "cut a release built with a fixed Go"; GitHub emails the owner.
 name: security-weekly
 on:
@@ -25,3 +26,24 @@ jobs:
         run: |
           gh release download -R "$GITHUB_REPOSITORY" -p 'runner-guard_*' -D rel
           for b in rel/*; do echo "== $b"; go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 -mode=binary "$b"; done
+  fuzz:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {target: FuzzSetWSL, pkg: ./internal/tune}
+          - {target: FuzzWSLValue, pkg: ./internal/tune}
+          - {target: FuzzParseDockerOutput, pkg: ./internal/tune}
+          - {target: FuzzParseChecksums, pkg: ./internal/update}
+          - {target: FuzzLoad, pkg: ./internal/config}
+    env:
+      TARGET: ${{ matrix.target }}
+      PKG: ${{ matrix.pkg }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
+        with:
+          go-version: "1.27"
+      - name: fuzz
+        run: go test -run='^$' -fuzz="^${TARGET}$" -fuzztime=60s "$PKG"

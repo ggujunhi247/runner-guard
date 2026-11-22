@@ -561,3 +561,53 @@ func TestOldPruneKnobIsKept(t *testing.T) {
 		t.Fatalf("%+v", st.PrunePercent)
 	}
 }
+
+func hasCall(f *execx.Fake, joined string) bool {
+	for _, c := range f.Calls {
+		if strings.Join(c, " ") == joined {
+			return true
+		}
+	}
+	return false
+}
+
+func TestDeepPruneWhenStillAbove(t *testing.T) {
+	f := &execx.Fake{Responses: responses(true, svcRunning)}
+	d := newDeps(t, f, 80) // usage stays 80 after the normal pass
+	d.Cfg.PruneImages, d.Cfg.PruneDeep = true, true
+	rep, err := Run(context.Background(), d, false)
+	if err != nil || !rep.Pruned {
+		t.Fatal(err, rep.Pruned)
+	}
+	if !hasCall(f, "docker builder prune --all --force") || !hasCall(f, "docker image prune --all --force") {
+		t.Fatalf("no deep pass: %v", f.Calls)
+	}
+}
+
+func TestNoDeepPruneWhenImagesOff(t *testing.T) {
+	f := &execx.Fake{Responses: responses(true, svcRunning)}
+	d := newDeps(t, f, 80)
+	d.Cfg.PruneImages = false
+	Run(context.Background(), d, false)
+	if called(f, "image") || called(f, "builder") {
+		t.Fatalf("images touched: %v", f.Calls)
+	}
+}
+
+func TestNoDeepPruneWhenBelowAfterPrune(t *testing.T) {
+	f := &execx.Fake{Responses: responses(true, svcRunning)}
+	d := newDeps(t, f, 80)
+	d.Cfg.PruneImages, d.Cfg.PruneDeep = true, true
+	n := 0
+	d.Usage = func(context.Context) (float64, string, error) {
+		n++
+		if n == 1 {
+			return 80, "test", nil
+		}
+		return 50, "test", nil
+	}
+	Run(context.Background(), d, false)
+	if hasCall(f, "docker image prune --all --force") {
+		t.Fatalf("deep pass ran: %v", f.Calls)
+	}
+}

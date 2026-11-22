@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/ggujunhi247/runner-guard/internal/execx"
@@ -36,5 +37,32 @@ func TestApplyWSLWithDockerDeadRestoresAndKeepsRunnerBlocked(t *testing.T) {
 		if c[0] == "docker" && len(c) > 2 && c[2] == "stop" {
 			break
 		}
+	}
+}
+
+// A crash between writing .wslconfig and verifying it: the next run puts the
+// old file back, restarts WSL and freezes that knob.
+func TestInterruptedWSLChangeIsUndone(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("USERPROFILE", home)
+	path := filepath.Join(home, ".wslconfig")
+	os.WriteFile(path, []byte("[wsl2]\nmemory=12GB\n"), 0o644) // the unverified change
+	f := &execx.Fake{Responses: responses(true, svcRunning)}
+	d := newDeps(t, f, 50)
+	d.HistoryPath = filepath.Join(filepath.Dir(d.StatePath), "history.jsonl")
+	os.WriteFile(lastGood(d), []byte("[wsl2]\nmemory=10GB\n"), 0o644)
+	state.Save(d.StatePath, state.State{PendingWSLKey: "memory", PendingWSLPath: path, PendingWSLExisted: true})
+	var alerts []string
+	d.Alert = func(_ context.Context, msg string) error { alerts = append(alerts, msg); return nil }
+	Run(context.Background(), d, false)
+	if b, _ := os.ReadFile(path); string(b) != "[wsl2]\nmemory=10GB\n" {
+		t.Fatalf(".wslconfig not restored: %q", b)
+	}
+	st, _ := state.Load(d.StatePath)
+	if st.PendingWSLPath != "" || !st.WSLMemoryGB.Frozen || !called(f, "--shutdown") {
+		t.Fatalf("state %+v calls %v", st, f.Calls)
+	}
+	if !strings.Contains(strings.Join(alerts, ";"), "interrupted") {
+		t.Fatalf("not alerted: %v", alerts)
 	}
 }

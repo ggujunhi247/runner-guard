@@ -109,9 +109,14 @@ runner-guard는 두 조건을 모두 만족할 때만 직접 조치합니다. �
 | 볼륨 | 지움 | 지움 | 같은 러너 라벨이 붙었고, 어떤 컨테이너도 쓰지 않는 것만 |
 | 이미지 | **남김** | 지움 | `prune_images: true`일 때만. 72시간 전에 만들어졌고 어떤 컨테이너(멈춘 것 포함)도 쓰지 않는 것 |
 | 빌드 캐시 | **남김** | 지움 | `prune_images: true`일 때만. 72시간 전에 만들어진 것 |
+| 네트워크 | 지움 | 지움 | 러너 라벨이 붙었고 쓰지 않는 것만 |
+| Testcontainers가 남긴 것 | **남김** | 지움 | `prune_testcontainers: true`일 때만. `org.testcontainers=true` 라벨의 멈춘 컨테이너(1시간 이상 지난 것), 쓰지 않는 볼륨·네트워크 |
+| 심화 정리 | **남김** | 지움 | `prune_images`와 `prune_deep`이 모두 `true`이고, 위 정리 뒤에도 `prune_percent` 이상일 때만. 같은 실행 안에서 나이와 상관없이 빌드 캐시와 쓰지 않는 이미지를 지움 |
 | 실행 중인 컨테이너, 러너가 만들지 않은 컨테이너·볼륨 | 남김 | 남김 | 어떤 설정에서도 지우지 않음 |
 
 `image_age`(72h)는 이미지가 **만들어진 시각** 기준입니다. 마지막으로 쓴 시각이 아닙니다.
+
+각 정리 단계가 확보한 용량(Docker가 알려 주는 "Total reclaimed space")은 로그에 남습니다. 새 정리 규칙은 서명된 자동 업데이트로 각 호스트에 들어갑니다. 따로 설치할 것은 없습니다.
 
 Windows 러너는 CI 전용 호스트로 보고, 이미지 정리와 디스크 회수를 기본으로 켭니다. Linux는 운영 서비스가 같이 도는 호스트일 수 있어서 이미지를 남깁니다. 지우면 롤백용 이미지가 사라질 수 있기 때문입니다. CI 전용 Linux 호스트라면 설정에서 `prune_images: true`로 켜세요.
 
@@ -136,6 +141,10 @@ Windows 러너는 CI 전용 호스트로 보고, 이미지 정리와 디스크 �
 | 업데이트 확인 | `sudo runner-guard update --check` | `... update --check` |
 | 제거 | `sudo runner-guard uninstall` | `... uninstall` |
 
+- **새 호스트마다 설치 뒤 `doctor`를 한 번 실행하세요.** Docker 재시작, WSL 메모리·스왑 변경, 복구 재부팅, 예약 작업이 이 호스트에서 실제로 될지를 **읽기만 해서** 확인하고 `PASS`/`WARN`/`FAIL`로 보여 줍니다. 아무것도 재시작하거나 바꾸지 않습니다(테스트가 조회 명령만 쓰는지 확인합니다). 예:
+  - VM이 보고하는 메모리가 `.wslconfig` 값과 10% 넘게 다르면 `FAIL`: 자동 변경을 해도 매번 되돌려지는 상황
+  - 예약 작업이 Docker Desktop 사용자가 아닌 계정으로 등록됨
+  - 자동 로그온이 꺼져 있는데 재부팅 복구가 켜져 있음, Docker Desktop이 로그인 때 자동으로 켜지지 않음
 - `status` 끝의 `PROBLEM:` 줄은 사람이 고쳐야 하는 설정 문제입니다. 예:
   - `config.toml`을 못 읽어 `concurrent`를 조정할 수 없음
   - 5분 표본이 30분 넘게 없음
@@ -192,6 +201,7 @@ runner-guard run [--force]             --force: 기준 미만이어도 정리
 runner-guard update [--check]          --check: 새 버전이 있는지만 확인
 runner-guard sample                    사용량 표본 하나 기록(5분마다 예약됨)
 runner-guard tune [--reset]            자동 조정이 무엇을 바꿀지 보기 / 배운 값 지우기
+runner-guard doctor                    위험한 동작이 이 호스트에서 될지 읽기만 해서 확인
 runner-guard install | uninstall
 runner-guard selftest | version
 ```
@@ -207,6 +217,8 @@ runner-guard selftest | version
 | `desktop_budget_gb` | `60` | Docker Desktop에서 Docker 데이터에 허용할 용량 |
 | `image_age` | `"72h"` | 이미지·빌드 캐시 정리 기준(생성 시각) |
 | `prune_images` | Linux `false`, Windows `true` | 이미지·빌드 캐시도 정리할지 |
+| `prune_deep` | Linux `false`, Windows `true` | 정리 뒤에도 `prune_percent` 이상이면 나이와 상관없이 쓰지 않는 이미지와 빌드 캐시를 모두 지울지(`prune_images`도 켜져 있어야 함). Linux는 운영 롤백 이미지를 지울 수 있어 기본 꺼짐 |
+| `prune_testcontainers` | Linux `false`, Windows `true` | Testcontainers가 남긴 멈춘 컨테이너(1시간 이상)와 쓰지 않는 볼륨·네트워크를 지울지. Linux는 운영 컨테이너와 호스트를 같이 쓸 수 있어 기본 꺼짐 |
 | `desktop_reclaim` | Linux `false`, Windows `true` | 디스크 차단 중에 Docker Desktop VHDX 공간을 회수할지 |
 | `desktop_vhdx` | `""`(자동) | Docker Desktop 데이터 디스크 경로 |
 | `docker_restart_min_interval` | `"30m"` | Docker 재시작 최소 간격 |
@@ -250,6 +262,7 @@ gh pr create --fill          # 저장소 주인의 PR은 자동 머지가 켜짐
   - 머지된 브랜치는 지워집니다.
 - **자동 머지 대상** (`.github/workflows/automerge.yml`):
   - 저장소 주인이 이 저장소 브랜치에서 연 PR. draft이거나 `no-automerge` 라벨이 있으면 제외합니다.
+  - **보안에 민감한 파일**(워크플로, `internal/policy`, `internal/update`, `internal/fsx`, 설치·서명 스크립트, `SECURITY.md`)을 고친 PR은 자동으로 머지하지 않습니다. 검사가 통과한 뒤 사람이 `gh pr merge --rebase`로 머지합니다.
   - Dependabot의 Actions 업데이트(매주 한 PR로 묶음). 새 버전이 나온 지 7일이 지나야 제안합니다. 탈취된 릴리스가 보통 그 안에 드러나기 때문입니다. major 버전은 사람이 보도록 댓글만 남깁니다.
 - 자동 머지를 멈추려면 PR에 `no-automerge` 라벨을 붙이거나 `gh pr merge --disable-auto`를 실행합니다.
 - 릴리스는 자동이 아닙니다. 머지 뒤 `main`에서 태그를 push하고 서명합니다(아래).

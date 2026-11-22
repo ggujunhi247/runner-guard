@@ -48,12 +48,66 @@ func ShouldPrune(pct, threshold float64, force bool) bool {
 	return force || pct >= threshold
 }
 
-// Prune removes stopped runner containers and runner volumes, and, only when
+// TestcontainersLabel matches what Testcontainers leaves behind on the host Docker.
+const TestcontainersLabel = "label=org.testcontainers=true"
+
+// Step is one docker prune command and the space it reported freeing.
+type Step struct {
+	Args      []string
+	Reclaimed float64 // bytes; 0 when docker printed no size
+}
+
+// Total adds up the bytes freed by steps.
+func Total(steps []Step) float64 {
+	var n float64
+	for _, s := range steps {
+		n += s.Reclaimed
+	}
+	return n
+}
+
+// reclaimed reads the "Total reclaimed space: 1.5GB" line of a prune's output.
+func reclaimed(out string) float64 {
+	const key = "Total reclaimed space:"
+	for _, line := range strings.Split(out, "\n") {
+		if _, v, ok := strings.Cut(line, key); ok {
+			if n, err := ParseSize(v); err == nil {
+				return n
+			}
+		}
+	}
+	return 0
+}
+
+func runSteps(ctx context.Context, r execx.Runner, cmds [][]string) ([]Step, error) {
+	var steps []Step
+	var errs []error
+	for _, c := range cmds {
+		out, err := r.Run(ctx, pruneTimeout, "docker", c...)
+		if err != nil {
+			errs = append(errs, err)
+			continue
+		}
+		steps = append(steps, Step{Args: c, Reclaimed: reclaimed(out)})
+	}
+	return steps, errors.Join(errs...)
+}
+
+// Prune removes stopped runner containers, runner volumes and unused runner
+// networks; when prune_testcontainers is on, the same for Testcontainers
+// leftovers (containers only if stopped and older than 1h); and, only when
 // prune_images is on, unused images and build cache created before image_age.
-func Prune(ctx context.Context, r execx.Runner, cfg config.Config) error {
+func Prune(ctx context.Context, r execx.Runner, cfg config.Config) ([]Step, error) {
 	cmds := [][]string{
 		{"container", "prune", "--force", "--filter", RunnerLabel},
 		{"volume", "prune", "--all", "--force", "--filter", RunnerLabel},
+		{"network", "prune", "--force", "--filter", RunnerLabel},
+	}
+	if cfg.PruneTestcontainers {
+		cmds = append(cmds,
+			[]string{"container", "prune", "--force", "--filter", TestcontainersLabel, "--filter", "until=1h"},
+			[]string{"volume", "prune", "--all", "--force", "--filter", TestcontainersLabel},
+			[]string{"network", "prune", "--force", "--filter", TestcontainersLabel, "--filter", "until=1h"})
 	}
 	if cfg.PruneImages {
 		until := "until=" + cfg.ImageAge
@@ -61,13 +115,23 @@ func Prune(ctx context.Context, r execx.Runner, cfg config.Config) error {
 			[]string{"image", "prune", "--all", "--force", "--filter", until},
 			[]string{"builder", "prune", "--force", "--filter", until})
 	}
-	var errs []error
-	for _, c := range cmds {
-		if _, err := r.Run(ctx, pruneTimeout, "docker", c...); err != nil {
-			errs = append(errs, err)
-		}
+	return runSteps(ctx, r, cmds)
+}
+
+// PruneDeep runs when usage is still over prune_percent after Prune: build
+// cache and unused images of any age. Only with prune_images; otherwise it
+// does nothing (runner networks were already pruned by Prune, which has no
+// age filter).
+func PruneDeep(ctx context.Context, r execx.Runner, cfg config.Config) ([]Step, error) {
+	// Its own switch: prune_images alone means "aged images only" and must not
+	// start removing today's unused images on a host that also runs production.
+	if !cfg.PruneImages || !cfg.PruneDeep {
+		return nil, nil
 	}
-	return errors.Join(errs...)
+	return runSteps(ctx, r, [][]string{
+		{"builder", "prune", "--all", "--force"},
+		{"image", "prune", "--all", "--force"},
+	})
 }
 
 // desktopPercent: Docker Desktop's VHDX never shrinks, so take the worse of

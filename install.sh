@@ -24,8 +24,8 @@ trap 'rm -rf "$tmp"' EXIT
 curl -fsSL -o "$tmp/$asset" "$base/$asset"
 curl -fsSL -o "$tmp/checksums.txt" "$base/checksums.txt"
 curl -fsSL -o "$tmp/checksums.txt.sig" "$base/checksums.txt.sig"
-# The release key (private half kept off GitHub); same as internal/update.PublicKey.
-cat >"$tmp/release.pem" <<'EOF'
+# The release keys (private halves kept off GitHub); same as internal/update.PublicKeys.
+cat >"$tmp/key1.pem" <<'EOF'
 -----BEGIN PUBLIC KEY-----
 MIIBojANBgkqhkiG9w0BAQEFAAOCAY8AMIIBigKCAYEA4xuHI4gBNCLStJKC0Fc2
 FdwhBJleuR7p9awiT8d8TXJO1zZaWowAhz8nLIwq02NBRXdC8X6MMeBgqA194Llb
@@ -38,9 +38,25 @@ NxtdN4ChKEFWJgjm+Sw7ZMAUDPkTUrmQ29Pyd5HFmwRfWgF9RjEbmD6A5Jf5sgOO
 cZuuc5mziBKQAeDhjaT5nShJ9VkxdIep5m3vx8Cs5bn5AgMBAAE=
 -----END PUBLIC KEY-----
 EOF
+cat >"$tmp/key2.pem" <<'EOF'
+-----BEGIN PUBLIC KEY-----
+MIIBojANBgkqhkiG9w0BAQEFAAOCAY8AMIIBigKCAYEA2/gLMUkbQ3Ieml5ASxxD
+ILvXKhmAsaQXc78u4fUfIkNE8xdCOZuRJLh7nR3rZU/rWDuptHy6rwORbDbYNZ4b
+pNNbx0EFMLij4iAoGHzt2WZSre4lrQTq9+sOyUJgsDR33TW2eVFQb/6yQGqyKqVq
+kivf+uJKge291pf+o03W3J7ZK243OQyr+biNmYs/Y/jecE6FxELRVWc203rEXdfX
+8BN9l1+zEMKpTXI9jy+/e5mFpHgGbg7QBrTpcBisUj41MUVl6Jl7KbyrATJ586pq
+d8l4LiiicV9rqxNqFJRN6jGRJUhaD7DxUw6Cyrhsx69Rxr04DTurWDGgkuo1iHzV
+x/d7lvVUgV+/Go6H9aBZNkbiUKoSaxy9a1YTHtjWw9JJBr13mg3ILm8sWQC5jn+O
+4ggstjcYV1t0yv5gDBbQWPdDLahS2USq9I9Bu9AbaPdOCkuGC/H+mCWdC1hKVIAW
+dJCnFgKls3ZOHtUeaS7WGR2vEVDyjDF3lROcdiKboIrBAgMBAAE=
+-----END PUBLIC KEY-----
+EOF
 command -v openssl >/dev/null || { echo "runner-guard install: openssl is needed to check the release signature" >&2; exit 1; }
-openssl dgst -sha256 -verify "$tmp/release.pem" -signature "$tmp/checksums.txt.sig" "$tmp/checksums.txt" >/dev/null ||
-	{ echo "runner-guard install: release signature does not match; not installing" >&2; exit 1; }
+signed=no
+for k in "$tmp/key1.pem" "$tmp/key2.pem"; do
+	if openssl dgst -sha256 -verify "$k" -signature "$tmp/checksums.txt.sig" "$tmp/checksums.txt" >/dev/null 2>&1; then signed=yes; fi
+done
+[ "$signed" = yes ] || { echo "runner-guard install: release signature does not match; not installing" >&2; exit 1; }
 (cd "$tmp" && grep " $asset\$" checksums.txt | sha256sum -c -)
 chmod +x "$tmp/$asset"
 "$tmp/$asset" selftest

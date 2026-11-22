@@ -53,3 +53,11 @@ func TestEnsureSampleOnlyWhenMissing(t *testing.T) {
 		t.Fatal("added twice")
 	}
 }
+
+func TestTrustedOwnerRefusesWritableByOthers(t *testing.T) {
+	dir := t.TempDir()
+	os.Chmod(dir, 0o777)
+	if TrustedOwner(dir) == nil {
+		t.Fatal("a world-writable folder was trusted")
+	}
+}

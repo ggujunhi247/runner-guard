@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -80,5 +81,11 @@ func TestLoadAcceptsBOM(t *testing.T) {
 	os.WriteFile(p, []byte{0xFF, 0xFE, '{', 0, '}', 0}, 0o644)
 	if _, err := Load(p); err == nil || !strings.Contains(err.Error(), "UTF-16") {
 		t.Fatalf("%v", err)
+	}
+}
+
+func TestPruneTestcontainersDefault(t *testing.T) {
+	if got, want := Default().PruneTestcontainers, runtime.GOOS == "windows"; got != want {
+		t.Fatalf("%v", got)
 	}
 }

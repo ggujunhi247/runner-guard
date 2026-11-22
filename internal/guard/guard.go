@@ -168,6 +168,7 @@ func Run(ctx context.Context, d Deps, force bool) (Report, error) {
 		st.DockerRestarts = kept
 	}
 	var did []string
+	did = append(did, resumeWSL(ctx, d, &st)...)
 	waitHealthy := func() {
 		for i := 0; i < restartWaits && !rep.DockerHealthy; i++ {
 			d.sleep(restartPoll)
@@ -243,10 +244,23 @@ func Run(ctx context.Context, d Deps, force bool) (Report, error) {
 		if measured && disk.ShouldPrune(rep.Pct, PrunePercent(d, st), force) {
 			rep.Pruned = true
 			did = append(did, fmt.Sprintf("pruned at %.1f%%", rep.Pct))
-			if err := disk.Prune(ctx, d.R, d.Cfg); err != nil {
+			steps, err := disk.Prune(ctx, d.R, d.Cfg)
+			if err != nil {
 				warn("prune: %v", err)
 			}
+			logf("prune reclaimed %.0f MB (%d steps)", disk.Total(steps)/1e6, len(steps))
 			measure(" after prune")
+			if measured && rep.Pct >= PrunePercent(d, st) {
+				deep, err := disk.PruneDeep(ctx, d.R, d.Cfg)
+				if err != nil {
+					warn("deep prune: %v", err)
+				}
+				if len(deep) > 0 {
+					did = append(did, fmt.Sprintf("pruned deeper at %.1f%%", rep.Pct))
+					logf("deep prune reclaimed %.0f MB (%d steps)", disk.Total(deep)/1e6, len(deep))
+					measure(" after deep prune")
+				}
+			}
 		}
 	}
 

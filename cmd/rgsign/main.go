@@ -1,6 +1,6 @@
 // rgsign signs a release's checksums.txt with the release key, kept off
 // GitHub. Hosts verify the signature before installing anything
-// (internal/update.PublicKey), so a stolen GitHub account or a hijacked CI
+// (internal/update.PublicKeys), so a stolen GitHub account or a hijacked CI
 // step alone cannot ship code to them. Maintainer tool; not released.
 //
 //	rgsign -genkey -key <private.pem>   make the key pair once; prints the public key
@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/ggujunhi247/runner-guard/internal/fsx"
 	"github.com/ggujunhi247/runner-guard/internal/update"
 )
 
@@ -69,7 +70,7 @@ func run() error {
 		if err != nil {
 			return err
 		}
-		if err := os.WriteFile(*keyPath, pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: der}), 0o600); err != nil {
+		if err := fsx.WriteFile(*keyPath, pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: der}), 0o600); err != nil {
 			return err
 		}
 		return printPub(&k.PublicKey)
@@ -96,9 +97,9 @@ func run() error {
 	}
 	// Refuse to write a signature the shipped binaries would reject.
 	if err := update.VerifySignature(data, sig); err != nil {
-		return fmt.Errorf("this key is not the one in internal/update.PublicKey: %w", err)
+		return fmt.Errorf("this key is not one of internal/update.PublicKeys: %w", err)
 	}
-	return os.WriteFile(flag.Arg(0)+".sig", sig, 0o644)
+	return fsx.WriteFile(flag.Arg(0)+".sig", sig, 0o644)
 }
 
 func loadKey(path string) (*rsa.PrivateKey, error) {

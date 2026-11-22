@@ -16,6 +16,8 @@ type Config struct {
 	DesktopBudgetGB          float64  `json:"desktop_budget_gb"`
 	ImageAge                 string   `json:"image_age"`
 	PruneImages              bool     `json:"prune_images"`
+	PruneTestcontainers      bool     `json:"prune_testcontainers"`
+	PruneDeep                bool     `json:"prune_deep"` // all unused images and build cache when still over prune_percent
 	DesktopReclaim           bool     `json:"desktop_reclaim"`
 	DesktopVHDX              string   `json:"desktop_vhdx"`
 	DockerRestartMinInterval string   `json:"docker_restart_min_interval"`

@@ -219,27 +219,44 @@ func TestWorkflows(t *testing.T) {
 	}
 }
 
-// The release public key is the same in the updater and both install scripts.
-func TestReleaseKeyEverywhere(t *testing.T) {
-	blk, _ := pem.Decode([]byte(update.PublicKey))
-	if blk == nil {
-		t.Fatal("no PEM in update.PublicKey")
+// The release public keys are the same set in the updater and both install
+// scripts, at least two (one in use, one offline backup), distinct and strong.
+func TestReleaseKeysEverywhere(t *testing.T) {
+	if len(update.PublicKeys) < 2 {
+		t.Fatalf("%d release key(s); keep a backup key so a lost key cannot strand hosts", len(update.PublicKeys))
 	}
-	k, err := x509.ParsePKIXPublicKey(blk.Bytes)
-	if err != nil {
-		t.Fatal(err)
+	sh, ps := read(t, "install.sh"), read(t, "install.ps1")
+	seen := map[string]bool{}
+	for i, p := range update.PublicKeys {
+		blk, _ := pem.Decode([]byte(p))
+		if blk == nil {
+			t.Fatalf("key %d: no PEM", i)
+		}
+		k, err := x509.ParsePKIXPublicKey(blk.Bytes)
+		if err != nil {
+			t.Fatal(err)
+		}
+		rk := k.(*rsa.PublicKey)
+		if rk.N.BitLen() < 3072 || rk.E != 65537 {
+			t.Fatalf("key %d weak or odd: %d bits, e=%d", i, rk.N.BitLen(), rk.E)
+		}
+		mod := base64.StdEncoding.EncodeToString(rk.N.Bytes())
+		if seen[mod] {
+			t.Fatalf("key %d is a duplicate", i)
+		}
+		seen[mod] = true
+		if !strings.Contains(sh, strings.TrimSpace(p)) {
+			t.Errorf("install.sh lacks release key %d", i)
+		}
+		if !strings.Contains(ps, "'"+mod+"'") {
+			t.Errorf("install.ps1 lacks release key %d", i)
+		}
 	}
-	rk := k.(*rsa.PublicKey)
-	if rk.N.BitLen() < 3072 || rk.E != 65537 {
-		t.Fatalf("weak or odd release key: %d bits, e=%d", rk.N.BitLen(), rk.E)
+	if n := strings.Count(sh, "-----BEGIN PUBLIC KEY-----"); n != len(update.PublicKeys) {
+		t.Errorf("install.sh has %d keys, updater has %d", n, len(update.PublicKeys))
 	}
-	if sh := read(t, "install.sh"); !strings.Contains(sh, strings.TrimSpace(update.PublicKey)) {
-		t.Error("install.sh has a different release key than internal/update")
-	}
-	ps := read(t, "install.ps1")
-	if !strings.Contains(ps, "FromBase64String('"+base64.StdEncoding.EncodeToString(rk.N.Bytes())+"')") ||
-		!strings.Contains(ps, "FromBase64String('AQAB')") {
-		t.Error("install.ps1 has a different release key than internal/update")
+	if n := len(regexp.MustCompile(`'[A-Za-z0-9+/]{500,}={0,2}'`).FindAllString(ps, -1)); n != len(update.PublicKeys) {
+		t.Errorf("install.ps1 has %d keys, updater has %d", n, len(update.PublicKeys))
 	}
 }
 
@@ -266,5 +283,120 @@ func TestSignedFileListsAgree(t *testing.T) {
 		if !strings.Contains(up, name) {
 			t.Errorf("release.yml does not publish %s", f)
 		}
+	}
+}
+
+// Stdlib only: a dependency is a supply-chain path into a root/admin process.
+func TestStdlibOnly(t *testing.T) {
+	if regexp.MustCompile(`(?m)^\s*(require\b|\w.*\s+v\d)`).MatchString(read(t, "go.mod")) {
+		t.Error("go.mod has a require; this module is stdlib only")
+	}
+	if _, err := os.Stat(filepath.Join(root, "go.sum")); err == nil {
+		t.Error("go.sum exists; this module is stdlib only")
+	}
+}
+
+// Files are written only through internal/fsx (O_EXCL temp + rename), so a
+// pre-planted file or symlink is never followed or truncated.
+func TestWritesOnlyThroughFsx(t *testing.T) {
+	for path, f := range goFiles(t) {
+		if strings.HasPrefix(path, "internal/fsx/") {
+			continue
+		}
+		ast.Inspect(f, func(n ast.Node) bool {
+			if pkg, name, ok := selector(n); ok && pkg == "os" && (name == "WriteFile" || name == "Create") {
+				t.Errorf("%s uses os.%s; use fsx.WriteFile", path, name)
+			}
+			return true
+		})
+	}
+}
+
+// Environment variables the program may read. Each is read by name only, so
+// the environment of a root/admin process cannot steer it somewhere new.
+var allowedEnv = map[string]bool{
+	"ProgramData": true, "LOCALAPPDATA": true, "APPDATA": true, "SystemDrive": true,
+	"USERDOMAIN": true, "USERNAME": true, "ProgramFiles": true, "RUNNER_GUARD_GITHUB_TOKEN": true,
+}
+
+func TestEnvReadsAllowlisted(t *testing.T) {
+	for path, f := range goFiles(t) {
+		ast.Inspect(f, func(n ast.Node) bool {
+			call, ok := n.(*ast.CallExpr)
+			if !ok {
+				return true
+			}
+			if pkg, name, ok := selector(call.Fun); ok && pkg == "os" && (name == "Getenv" || name == "LookupEnv") {
+				lit, _ := call.Args[0].(*ast.BasicLit)
+				if lit == nil || lit.Kind != token.STRING {
+					t.Errorf("%s: os.%s with a non-literal name", path, name)
+				} else if s, _ := strconv.Unquote(lit.Value); !allowedEnv[s] {
+					t.Errorf("%s: os.%s(%q) is not in the allowlist", path, name, s)
+				}
+			}
+			return true
+		})
+	}
+}
+
+// Network hosts the program may name. A new URL is a new place data can go.
+var allowedHosts = map[string]bool{"api.github.com": true}
+
+func TestURLHostsAllowlisted(t *testing.T) {
+	for path, f := range goFiles(t) {
+		ast.Inspect(f, func(n ast.Node) bool {
+			lit, ok := n.(*ast.BasicLit)
+			if !ok || lit.Kind != token.STRING {
+				return true
+			}
+			s, _ := strconv.Unquote(lit.Value)
+			if m := regexp.MustCompile(`https?://([^/\s"'?#:]*)`).FindStringSubmatch(s); m != nil && strings.Contains(s, "://") &&
+				(strings.HasPrefix(s, "https://") || strings.HasPrefix(s, "http://")) && !allowedHosts[m[1]] {
+				t.Errorf("%s: URL host %q is not in the allowlist", path, m[1])
+			}
+			return true
+		})
+	}
+}
+
+// The workflow-level permissions grant read only; a write is scoped to the
+// one job that needs it, so a new job never inherits it.
+func TestWorkflowTopPermissionsReadOnly(t *testing.T) {
+	files, _ := filepath.Glob(filepath.Join(root, ".github", "workflows", "*.yml"))
+	for _, p := range files {
+		name := filepath.Base(p)
+		in := false
+		for i, l := range strings.Split(read(t, filepath.Join(".github", "workflows", name)), "\n") {
+			if strings.HasPrefix(l, "permissions:") {
+				in = true
+				if strings.Contains(l, "write") {
+					t.Errorf("%s:%d: top-level permissions grant write", name, i+1)
+				}
+				continue
+			}
+			if in && (l == "" || l[0] == ' ') {
+				if strings.Contains(l, "write") {
+					t.Errorf("%s:%d: top-level permissions grant write; move it into the job", name, i+1)
+				}
+			} else if in {
+				in = false
+			}
+		}
+	}
+}
+
+// Auto-merge never covers changes to the security machinery itself: those
+// need a person, even from the owner.
+func TestAutomergeSkipsSensitivePaths(t *testing.T) {
+	wf := read(t, ".github/workflows/automerge.yml")
+	for _, p := range []string{`\.github/`, "internal/policy/", "internal/update/", "internal/fsx/", "internal/schedule/",
+		"cmd/runner-guard/", "cmd/rgsign/", "scripts/", `install\.sh`, `install\.ps1`, `rg-windows\.ps1`, `go\.mod`, `SECURITY\.md`,
+		"previous_filename", "shell: bash"} {
+		if !strings.Contains(wf, p) {
+			t.Errorf("automerge.yml does not guard %s", p)
+		}
+	}
+	if !strings.Contains(wf, "github.actor == github.repository_owner") {
+		t.Error("automerge.yml does not require the actor to be the owner or Dependabot")
 	}
 }

@@ -93,7 +93,9 @@ func writeIfUnchanged(path string, orig, data []byte) error {
 	return os.Rename(tmp, path)
 }
 
-var wslKeyRe = regexp.MustCompile(`^\s*(memory|swap)\s*=`)
+// WSL reads keys case-insensitively, so `Memory = 8GB` must be replaced, not
+// shadowed by an appended `memory=` line (found by FuzzSetWSL).
+var wslKeyRe = regexp.MustCompile(`(?i)^\s*(memory|swap)\s*=`)
 
 var wslValRe = regexp.MustCompile(`(?i)^\s*(memory|swap)\s*=\s*(\d+(?:\.\d+)?)\s*(GB|MB)\s*$`)
 

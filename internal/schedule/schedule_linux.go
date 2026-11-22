@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/ggujunhi247/runner-guard/internal/execx"
+	"github.com/ggujunhi247/runner-guard/internal/fsx"
 )
 
 var unitDir = "/etc/systemd/system"
@@ -87,7 +88,7 @@ func EnsureSample(ctx context.Context, r execx.Runner, bin string) (bool, error)
 	}
 	u := units(bin)
 	for _, name := range []string{"runner-guard-sample.service", "runner-guard-sample.timer"} {
-		if err := os.WriteFile(filepath.Join(unitDir, name), []byte(u[name]), 0o644); err != nil {
+		if err := fsx.WriteFile(filepath.Join(unitDir, name), []byte(u[name]), 0o644); err != nil {
 			return false, err
 		}
 	}
@@ -100,7 +101,7 @@ func EnsureSample(ctx context.Context, r execx.Runner, bin string) (bool, error)
 
 func Install(ctx context.Context, r execx.Runner, bin string) error {
 	for name, body := range units(bin) {
-		if err := os.WriteFile(filepath.Join(unitDir, name), []byte(body), 0o644); err != nil {
+		if err := fsx.WriteFile(filepath.Join(unitDir, name), []byte(body), 0o644); err != nil {
 			return err
 		}
 	}

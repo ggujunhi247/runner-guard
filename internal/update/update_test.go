@@ -22,8 +22,8 @@ import (
 
 // The tests sign with their own key; the real one is checked first.
 var (
-	releasePublicKey = PublicKey
-	testKey          *rsa.PrivateKey
+	releasePublicKeys = PublicKeys
+	testKey           *rsa.PrivateKey
 )
 
 func TestMain(m *testing.M) {
@@ -32,7 +32,7 @@ func TestMain(m *testing.M) {
 		panic(err)
 	}
 	der, _ := x509.MarshalPKIXPublicKey(&testKey.PublicKey)
-	PublicKey = string(pem.EncodeToMemory(&pem.Block{Type: "PUBLIC KEY", Bytes: der}))
+	PublicKeys = []string{string(pem.EncodeToMemory(&pem.Block{Type: "PUBLIC KEY", Bytes: der}))}
 	os.Exit(m.Run())
 }
 
@@ -45,14 +45,33 @@ func sign(t *testing.T, data []byte) []byte {
 	return sig
 }
 
-func TestReleaseKeyIsUsable(t *testing.T) {
-	blk, _ := pem.Decode([]byte(releasePublicKey))
-	if blk == nil {
-		t.Fatal("no PEM")
+func TestReleaseKeysAreUsable(t *testing.T) {
+	for i, p := range releasePublicKeys {
+		blk, _ := pem.Decode([]byte(p))
+		if blk == nil {
+			t.Fatalf("key %d: no PEM", i)
+		}
+		k, err := x509.ParsePKIXPublicKey(blk.Bytes)
+		if rk, ok := k.(*rsa.PublicKey); err != nil || !ok || rk.N.BitLen() < 3072 {
+			t.Fatalf("key %d: %v", i, err)
+		}
 	}
-	k, err := x509.ParsePKIXPublicKey(blk.Bytes)
-	if rk, ok := k.(*rsa.PublicKey); err != nil || !ok || rk.N.BitLen() < 3072 {
-		t.Fatalf("release key: %v", err)
+}
+
+// Any built-in key verifies; a key that is not built in does not.
+func TestEitherKeyVerifies(t *testing.T) {
+	saved := PublicKeys
+	defer func() { PublicKeys = saved }()
+	other, _ := rsa.GenerateKey(rand.Reader, 2048)
+	der, _ := x509.MarshalPKIXPublicKey(&other.PublicKey)
+	PublicKeys = []string{string(pem.EncodeToMemory(&pem.Block{Type: "PUBLIC KEY", Bytes: der})), saved[0]}
+	data := []byte("x")
+	if err := VerifySignature(data, sign(t, data)); err != nil {
+		t.Fatalf("second key: %v", err)
+	}
+	PublicKeys = PublicKeys[:1]
+	if VerifySignature(data, sign(t, data)) == nil {
+		t.Fatal("a key that is not built in verified")
 	}
 }
 

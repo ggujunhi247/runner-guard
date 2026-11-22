@@ -26,15 +26,23 @@ try {
     Invoke-WebRequest -UseBasicParsing -Uri "$base/$asset" -OutFile $exe
     Invoke-WebRequest -UseBasicParsing -Uri "$base/checksums.txt" -OutFile (Join-Path $tmp 'checksums.txt')
     Invoke-WebRequest -UseBasicParsing -Uri "$base/checksums.txt.sig" -OutFile (Join-Path $tmp 'checksums.txt.sig')
-    # The release key (private half kept off GitHub); same as internal/update.PublicKey.
-    $p = New-Object Security.Cryptography.RSAParameters
-    $p.Modulus = [Convert]::FromBase64String('4xuHI4gBNCLStJKC0Fc2FdwhBJleuR7p9awiT8d8TXJO1zZaWowAhz8nLIwq02NBRXdC8X6MMeBgqA194LlbpoZk0AulasLIfSLpCq9GfPEjUUfIlwVOoeouROVl2VQJPZs7Sy/iffFaux5uOPJG9cLj5XqHiy5q6UnJey7kwyOl7Bi/rblULz95dF37WTmh7Gxikkh5cmXUPig6D82cT02YoEvKOLUK6m94KqA1HJ+wLpVrjPQA52u8dyAtr6Dl+ajlnkZH7Pq1tQB4C5RCh1NJz75mpBupKgnTqzmrzFEcUZZC3K6pVejeZnBYZRY7j8UCzSqZgyNLBIY+9hLo/wIqG4XYPDJ/bVS2vcRAex6YmbnxA9Ur3/14ZBayfEliuIkegDOgm0cza7RuqHK2NxtdN4ChKEFWJgjm+Sw7ZMAUDPkTUrmQ29Pyd5HFmwRfWgF9RjEbmD6A5Jf5sgOOcZuuc5mziBKQAeDhjaT5nShJ9VkxdIep5m3vx8Cs5bn5')
-    $p.Exponent = [Convert]::FromBase64String('AQAB')
-    $rsa = New-Object Security.Cryptography.RSACryptoServiceProvider
-    $rsa.ImportParameters($p)
+    # The release keys (private halves kept off GitHub); same as internal/update.PublicKeys.
+    $moduli = @(
+        '4xuHI4gBNCLStJKC0Fc2FdwhBJleuR7p9awiT8d8TXJO1zZaWowAhz8nLIwq02NBRXdC8X6MMeBgqA194LlbpoZk0AulasLIfSLpCq9GfPEjUUfIlwVOoeouROVl2VQJPZs7Sy/iffFaux5uOPJG9cLj5XqHiy5q6UnJey7kwyOl7Bi/rblULz95dF37WTmh7Gxikkh5cmXUPig6D82cT02YoEvKOLUK6m94KqA1HJ+wLpVrjPQA52u8dyAtr6Dl+ajlnkZH7Pq1tQB4C5RCh1NJz75mpBupKgnTqzmrzFEcUZZC3K6pVejeZnBYZRY7j8UCzSqZgyNLBIY+9hLo/wIqG4XYPDJ/bVS2vcRAex6YmbnxA9Ur3/14ZBayfEliuIkegDOgm0cza7RuqHK2NxtdN4ChKEFWJgjm+Sw7ZMAUDPkTUrmQ29Pyd5HFmwRfWgF9RjEbmD6A5Jf5sgOOcZuuc5mziBKQAeDhjaT5nShJ9VkxdIep5m3vx8Cs5bn5',
+        '2/gLMUkbQ3Ieml5ASxxDILvXKhmAsaQXc78u4fUfIkNE8xdCOZuRJLh7nR3rZU/rWDuptHy6rwORbDbYNZ4bpNNbx0EFMLij4iAoGHzt2WZSre4lrQTq9+sOyUJgsDR33TW2eVFQb/6yQGqyKqVqkivf+uJKge291pf+o03W3J7ZK243OQyr+biNmYs/Y/jecE6FxELRVWc203rEXdfX8BN9l1+zEMKpTXI9jy+/e5mFpHgGbg7QBrTpcBisUj41MUVl6Jl7KbyrATJ586pqd8l4LiiicV9rqxNqFJRN6jGRJUhaD7DxUw6Cyrhsx69Rxr04DTurWDGgkuo1iHzVx/d7lvVUgV+/Go6H9aBZNkbiUKoSaxy9a1YTHtjWw9JJBr13mg3ILm8sWQC5jn+O4ggstjcYV1t0yv5gDBbQWPdDLahS2USq9I9Bu9AbaPdOCkuGC/H+mCWdC1hKVIAWdJCnFgKls3ZOHtUeaS7WGR2vEVDyjDF3lROcdiKboIrB'
+    )
     $sums = [IO.File]::ReadAllBytes((Join-Path $tmp 'checksums.txt'))
     $sig = [IO.File]::ReadAllBytes((Join-Path $tmp 'checksums.txt.sig'))
-    if (-not $rsa.VerifyData($sums, 'SHA256', $sig)) { throw 'runner-guard install: release signature does not match; not installing' }
+    $signed = $false
+    foreach ($m in $moduli) {
+        $p = New-Object Security.Cryptography.RSAParameters
+        $p.Modulus = [Convert]::FromBase64String($m)
+        $p.Exponent = [Convert]::FromBase64String('AQAB')
+        $rsa = New-Object Security.Cryptography.RSACryptoServiceProvider
+        $rsa.ImportParameters($p)
+        if ($rsa.VerifyData($sums, 'SHA256', $sig)) { $signed = $true }
+    }
+    if (-not $signed) { throw 'runner-guard install: release signature does not match; not installing' }
     # Strict sha256sum format, exactly one entry: a line other tools would skip must not pick the hash.
     $all = [IO.File]::ReadAllText((Join-Path $tmp 'checksums.txt')).TrimEnd("`n").Split("`n")
     if ($all | Where-Object { $_ -cnotmatch '^[0-9a-f]{64} [ *]\S+$' }) { throw 'runner-guard install: malformed checksums.txt' }
