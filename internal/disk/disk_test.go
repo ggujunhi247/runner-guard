@@ -156,3 +156,15 @@ func TestPruneDeepNeedsItsOwnSwitch(t *testing.T) {
 		t.Fatalf("deep pass ran: %v", f.Calls)
 	}
 }
+
+func TestReclaimedReadsBothFormats(t *testing.T) {
+	for out, want := range map[string]float64{
+		"Deleted Images:\nx\n\nTotal reclaimed space: 1.5GB\n": 1.5e9,
+		"ID\tRECLAIMABLE\tSIZE\nabc\ttrue\t1GB\nTotal:\t2GB\n": 2e9,
+		"Total reclaimed space: 0B\n":                          0,
+	} {
+		if got := reclaimed(out); got != want {
+			t.Errorf("%q: %v, want %v", out, got, want)
+		}
+	}
+}

@@ -43,7 +43,7 @@ func TrustedOwner(dir string) error {
 	if trustedSID(sid, me) {
 		return nil
 	}
-	return fmt.Errorf("%s already exists and is owned by %s, not Administrators: another account may have planted files there; check it, delete it as an administrator and install again", dir, sid)
+	return fmt.Errorf("%s already exists and is owned by %s, not Administrators: another account may have planted files there. Check config.json and the other files, then take ownership (takeown /F %s /R /A) and install again; do not delete it (config and state live there)", dir, sid, dir)
 }
 
 func trustedSID(sid, me string) bool {

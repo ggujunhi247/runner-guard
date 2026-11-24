@@ -18,7 +18,7 @@ func TrustedOwner(dir string) error {
 		return fmt.Errorf("owner of %s: unknown", dir)
 	}
 	if st.Uid != 0 || fi.Mode().Perm()&0o022 != 0 {
-		return fmt.Errorf("%s already exists owned by uid %d with mode %v: only root may own and write it; check it, remove it and install again", dir, st.Uid, fi.Mode().Perm())
+		return fmt.Errorf("%s already exists owned by uid %d with mode %v: only root may own and write it. Check its files, then chown -R root: and chmod go-w it, and install again", dir, st.Uid, fi.Mode().Perm())
 	}
 	return nil
 }

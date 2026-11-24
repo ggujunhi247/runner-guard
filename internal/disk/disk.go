@@ -67,12 +67,15 @@ func Total(steps []Step) float64 {
 }
 
 // reclaimed reads the "Total reclaimed space: 1.5GB" line of a prune's output.
+// reclaimed reads docker's summary: "Total reclaimed space: 1.2GB" for most
+// prunes, "Total:\t1.2GB" from BuildKit's builder prune.
 func reclaimed(out string) float64 {
-	const key = "Total reclaimed space:"
-	for _, line := range strings.Split(out, "\n") {
-		if _, v, ok := strings.Cut(line, key); ok {
-			if n, err := ParseSize(v); err == nil {
-				return n
+	for _, key := range []string{"Total reclaimed space:", "Total:"} { // the specific one wins
+		for _, line := range strings.Split(out, "\n") {
+			if v, ok := strings.CutPrefix(strings.TrimSpace(line), key); ok {
+				if n, err := ParseSize(strings.TrimSpace(v)); err == nil {
+					return n
+				}
 			}
 		}
 	}

@@ -42,13 +42,17 @@ func Lock(path string, stale time.Duration) (unlock func(), err error) {
 		if err != nil {
 			continue // removed meanwhile; try again
 		}
-		// A crashed or rebooted run leaves its lock behind; don't wait out stale
-		// when its process is gone. A reused PID just falls back to the age.
+		// A crashed or rebooted run leaves its lock behind: taken at once when
+		// its process is gone. A live holder keeps it even past stale (a stuck
+		// docker can make a run that long; two runs would overwrite each
+		// other's state), up to 6x stale in case its PID was reused.
 		var pid int
 		if b, err := os.ReadFile(path); err == nil {
 			fmt.Sscan(string(b), &pid)
 		}
-		if time.Since(fi.ModTime()) < stale && (pid <= 0 || alive(pid)) {
+		age := time.Since(fi.ModTime())
+		dead := pid > 0 && !alive(pid)
+		if !dead && (age < stale || pid > 0 && age < 6*stale) {
 			return nil, ErrLocked
 		}
 		// Rename, not remove: of several contenders only one moves the stale file.

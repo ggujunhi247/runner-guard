@@ -1,6 +1,8 @@
 package tune
 
 import (
+	"github.com/ggujunhi247/runner-guard/internal/fsx"
+
 	"bytes"
 	"fmt"
 	"os"
@@ -64,33 +66,17 @@ func SetConcurrent(path string, from, to int) error {
 	return writeIfUnchanged(path, b, []byte(strings.Join(ls, "\n")))
 }
 
-// writeIfUnchanged replaces path with data unless it changed since orig was read.
+// writeIfUnchanged replaces path with data unless it changed since orig was
+// read, keeping its permissions (config.toml holds the runner tokens).
 func writeIfUnchanged(path string, orig, data []byte) error {
 	mode := os.FileMode(0o600)
 	if fi, err := os.Stat(path); err == nil {
 		mode = fi.Mode().Perm()
 	}
-	tmp := path + ".runner-guard.new"
-	// Fresh file only: a pre-made one would keep its owner and ACL, and the
-	// rename would hand them the runner tokens in config.toml.
-	os.Remove(tmp)
-	f, err := os.OpenFile(tmp, os.O_CREATE|os.O_EXCL|os.O_WRONLY, mode)
-	if err != nil {
-		return err
-	}
-	_, err = f.Write(data)
-	if cerr := f.Close(); err == nil {
-		err = cerr
-	}
-	if err != nil {
-		os.Remove(tmp)
-		return err
-	}
 	if now, err := os.ReadFile(path); err != nil && !os.IsNotExist(err) || err == nil && !bytes.Equal(now, orig) {
-		os.Remove(tmp)
 		return fmt.Errorf("%s changed while editing; left alone", path)
 	}
-	return os.Rename(tmp, path)
+	return fsx.WriteFile(path, data, mode)
 }
 
 // WSL reads keys case-insensitively, so `Memory = 8GB` must be replaced, not

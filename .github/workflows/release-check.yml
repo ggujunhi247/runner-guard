@@ -48,6 +48,9 @@ jobs:
 
   # What a new host runs: the install script from this commit installs the
   # release just published; running it again must reinstall in place.
+  # The published, signed release through the install scripts. The command
+  # tour (sample, run, doctor, helper script, permissions) runs on every PR in
+  # ci.yml e2e on the same code; here only what a release adds.
   install-smoke:
     strategy:
       fail-fast: false
@@ -66,12 +69,7 @@ jobs:
           sudo RG_VERSION="$TAG" sh install.sh
           test "$(runner-guard version)" = "$TAG"
           for t in run update sample; do systemctl is-enabled "runner-guard-$t.timer"; done
-          # Real commands against the runner's Docker (no gitlab-runner here).
-          sudo runner-guard sample
-          sudo runner-guard run
-          sudo test "$(sudo grep -c . /var/lib/runner-guard/history.jsonl)" -ge 2
-          sudo runner-guard status
-          sudo runner-guard tune
+          sudo runner-guard selftest
           sudo runner-guard uninstall
       - name: install twice, check, uninstall (Windows)
         if: runner.os == 'Windows'
@@ -86,21 +84,7 @@ jobs:
             schtasks /Query /TN $t | Out-Null
             if ($LASTEXITCODE -ne 0) { throw "task $t missing" }
           }
-          $tr = (schtasks /Query /TN runner-guard-run /V /FO LIST | Select-String 'Task To Run').ToString()
-          if ($tr -notmatch 'conhost.exe --headless') { throw "run task not headless: $tr" }
-          & $bin sample
-          if ($LASTEXITCODE -ne 0) { throw 'sample failed' }
-          $hist = Join-Path $env:ProgramData 'runner-guard\history.jsonl'
-          if (-not (Test-Path $hist)) { throw 'sample wrote no history' }
-          & $bin tune
-          # The helper script drives the same install.
-          .\rg-windows.ps1 preflight
-          .\rg-windows.ps1 set desktop_budget_gb 120
-          .\rg-windows.ps1 set refuse_if_exists '["C:\\no-such-marker"]'
-          .\rg-windows.ps1 status
-          if ($LASTEXITCODE -ne 0) { throw 'status failed after set' }
-          .\rg-windows.ps1 tasks
-          .\rg-windows.ps1 pause
-          .\rg-windows.ps1 resume
+          & $bin selftest
+          if ($LASTEXITCODE -ne 0) { throw 'selftest failed' }
           & $bin uninstall
           if ($LASTEXITCODE -ne 0) { throw 'uninstall failed' }
