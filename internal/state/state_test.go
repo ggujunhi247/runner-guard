@@ -58,7 +58,7 @@ func TestLockExcludesSecondHolder(t *testing.T) {
 
 func TestLockReplacesStale(t *testing.T) {
 	p := filepath.Join(t.TempDir(), "lock")
-	os.WriteFile(p, []byte("1\n"), 0o644)
+	os.WriteFile(p, []byte("unknown\n"), 0o644) // no PID: age alone decides
 	old := time.Now().Add(-3 * time.Hour)
 	os.Chtimes(p, old, old)
 	unlock, err := Lock(p, 2*time.Hour)
@@ -97,4 +97,22 @@ func TestUnlockLeavesForeignLock(t *testing.T) {
 	if _, err := os.Stat(p); err != nil {
 		t.Fatal("unlock removed a lock it no longer owns")
 	}
+}
+
+// A live holder keeps the lock past stale (a long run), but not forever (a reused PID).
+func TestLockLiveHolderPastStale(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "lock")
+	os.WriteFile(p, []byte(fmt.Sprintf("%d 1\n", os.Getpid())), 0o644)
+	old := time.Now().Add(-3 * time.Hour)
+	os.Chtimes(p, old, old)
+	if _, err := Lock(p, 2*time.Hour); !errors.Is(err, ErrLocked) {
+		t.Fatalf("took the lock from a live run: %v", err)
+	}
+	ancient := time.Now().Add(-13 * time.Hour)
+	os.Chtimes(p, ancient, ancient)
+	unlock, err := Lock(p, 2*time.Hour)
+	if err != nil {
+		t.Fatalf("a 13h-old lock was kept: %v", err)
+	}
+	unlock()
 }

@@ -228,16 +228,13 @@ func doTune(d guard.Deps, reset bool, w io.Writer) error {
 		return err
 	}
 	mode := "auto (one change per day)"
-	if !d.Cfg.AutoTune || fileExists(guard.KillSwitch(config.Dir())) {
+	if !guard.TuneActive(d) {
 		mode = "report only (auto_tune false or tune.disabled present)"
 	}
 	fmt.Fprintf(w, "tune mode: %s\nprune_percent in use: %g (config %g)\n", mode, guard.PrunePercent(d, st), d.Cfg.PrunePercent)
-	for _, k := range []struct {
-		name string
-		k    state.Knob
-	}{{tune.Concurrent, st.Concurrent}, {tune.WSLMemory, st.WSLMemoryGB}, {tune.WSLSwap, st.WSLSwapGB}, {tune.Prune, st.PrunePercent}} {
-		if k.k.Value != 0 || k.k.Frozen {
-			fmt.Fprintf(w, "  %s: %g (since %s, ceiling %g, reverts %d, frozen %v)\n", k.name, k.k.Value, k.k.Since.Format(time.RFC3339), k.k.Ceiling, k.k.Reverts, k.k.Frozen)
+	for _, n := range guard.Knobs(&st) {
+		if k := n.K; k.Value != 0 || k.Frozen {
+			fmt.Fprintf(w, "  %s: %g (since %s, ceiling %g, reverts %d, frozen %v)\n", n.Name, k.Value, k.Since.Format(time.RFC3339), k.Ceiling, k.Reverts, k.Frozen)
 		}
 	}
 	for _, n := range p.Notes {
@@ -477,9 +474,10 @@ func doUpdate(ctx context.Context, w io.Writer, checkOnly bool) (rerr error) {
 		return err
 	}
 	// Samples right after an update are not normal load; tuning skips them.
-	st, _ := state.Load(statePath())
-	st.LastUpdate = time.Now()
-	state.Save(statePath(), st)
+	if st, warn := state.Load(statePath()); warn == "" { // unreadable state: saving would wipe BlockedByUs
+		st.LastUpdate = time.Now()
+		state.Save(statePath(), st)
+	}
 	logf("updated %s -> %s", update.Version, rel.Tag)
 	return nil
 }
@@ -645,7 +643,7 @@ func statusTune(ctx context.Context, d guard.Deps, st state.State, s *statusRepo
 		s.Problems = append(s.Problems, fmt.Sprintf("cannot read concurrent from %s; set runner_config (%v)", d.Cfg.RunnerConfig, err))
 	}
 	s.TuneMode = "auto"
-	if !d.Cfg.AutoTune || fileExists(guard.KillSwitch(config.Dir())) {
+	if !guard.TuneActive(d) {
 		s.TuneMode = "report only"
 	}
 	if !st.LastTune.IsZero() {
@@ -659,9 +657,9 @@ func statusTune(ctx context.Context, d guard.Deps, st state.State, s *statusRepo
 			s.Problems = append(s.Problems, "no usage sample in the last 30 min; is the runner-guard-sample task/timer running?")
 		}
 	}
-	for name, k := range map[string]state.Knob{tune.Concurrent: st.Concurrent, tune.WSLMemory: st.WSLMemoryGB, tune.WSLSwap: st.WSLSwapGB, tune.Prune: st.PrunePercent} {
-		if k.Frozen {
-			s.Problems = append(s.Problems, name+" tuning is frozen; check the log, then runner-guard tune --reset")
+	for _, n := range guard.Knobs(&st) {
+		if n.K.Frozen {
+			s.Problems = append(s.Problems, n.Name+" tuning is frozen; check the log, then runner-guard tune --reset")
 		}
 	}
 	if s.DockerHealthy && s.DiskPercent >= d.Cfg.BlockPercent {

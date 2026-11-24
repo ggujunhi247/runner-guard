@@ -2,6 +2,8 @@
 package state
 
 import (
+	"github.com/ggujunhi247/runner-guard/internal/fsx"
+
 	"bytes"
 	"encoding/json"
 	"errors"
@@ -73,31 +75,14 @@ func Load(path string) (State, string) {
 	return s, ""
 }
 
-// Save writes atomically: temp file in the same directory, then rename.
+// Save writes atomically (internal/fsx).
 func Save(path string, s State) error {
-	dir := filepath.Dir(path)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
 	}
 	b, err := json.MarshalIndent(s, "", "  ")
 	if err != nil {
 		return err
 	}
-	f, err := os.CreateTemp(dir, ".state-*")
-	if err != nil {
-		return err
-	}
-	defer os.Remove(f.Name())
-	if _, err := f.Write(b); err != nil {
-		f.Close()
-		return err
-	}
-	if err := f.Sync(); err != nil {
-		f.Close()
-		return err
-	}
-	if err := f.Close(); err != nil {
-		return err
-	}
-	return os.Rename(f.Name(), path)
+	return fsx.WriteFile(path, b, 0o644)
 }

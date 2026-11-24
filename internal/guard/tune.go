@@ -29,6 +29,10 @@ func TunePlan(d Deps, st *state.State, now time.Time) (tune.Plan, error) {
 	if err != nil {
 		return tune.Plan{}, err
 	}
+	return plan(d, st, now, h), nil
+}
+
+func plan(d Deps, st *state.State, now time.Time, h []tune.Sample) tune.Plan {
 	in := tune.Input{History: h, Cfg: d.Cfg, Now: now, Cores: runtime.NumCPU(), Windows: runtime.GOOS == "windows"}
 	var notes []string
 	// The files are the truth; a hand edit restarts that knob's tuning.
@@ -61,28 +65,27 @@ func TunePlan(d Deps, st *state.State, now time.Time) (tune.Plan, error) {
 	in.State = *st
 	p := tune.Decide(in)
 	p.Notes = append(notes, p.Notes...)
-	return p, nil
+	return p
 }
 
 // dailyTune applies at most one change per day and returns what to alert on.
 // retry is true when a change was deferred because the runner was busy.
 func dailyTune(ctx context.Context, d Deps, st *state.State, now time.Time, logf func(string, ...any)) (msgs []string, retry bool) {
 	h, err := tune.Load(d.HistoryPath, now.Add(-tune.Keep))
-	if err == nil && len(h) > 0 {
-		if err := tune.Rewrite(d.HistoryPath, h); err != nil {
-			logf("warning: trim history: %v", err)
-		}
-	}
-	p, err := TunePlan(d, st, now)
 	if err != nil {
 		logf("warning: tune: %v", err)
 		return nil, false
 	}
+	if len(h) > 0 {
+		if err := tune.Rewrite(d.HistoryPath, h); err != nil {
+			logf("warning: trim history: %v", err)
+		}
+	}
+	p := plan(d, st, now, h)
 	for _, n := range p.Notes {
 		logf("tune: %s", n)
 	}
-	active := d.Cfg.AutoTune && !d.exists(KillSwitch(filepath.Dir(d.HistoryPath)))
-	if !active {
+	if !TuneActive(d) {
 		var would []string
 		for _, c := range p.Changes {
 			would = append(would, c.String())
@@ -127,16 +130,31 @@ func dailyTune(ctx context.Context, d Deps, st *state.State, now time.Time, logf
 	return nil, retry
 }
 
+// NamedKnob is one tuned setting and its state.
+type NamedKnob struct {
+	Name string
+	K    *state.Knob
+}
+
+// Knobs lists every tuned setting: the one place a new knob is added.
+func Knobs(st *state.State) []NamedKnob {
+	return []NamedKnob{{tune.Concurrent, &st.Concurrent}, {tune.WSLMemory, &st.WSLMemoryGB},
+		{tune.WSLSwap, &st.WSLSwapGB}, {tune.Prune, &st.PrunePercent}}
+}
+
 func knob(st *state.State, name string) *state.Knob {
-	switch name {
-	case tune.Concurrent:
-		return &st.Concurrent
-	case tune.WSLMemory:
-		return &st.WSLMemoryGB
-	case tune.WSLSwap:
-		return &st.WSLSwapGB
+	for _, k := range Knobs(st) {
+		if k.Name == name {
+			return k.K
+		}
 	}
-	return &st.PrunePercent
+	panic("unknown knob " + name)
+}
+
+// TuneActive: tuning applies changes unless auto_tune is off or the kill
+// switch file is in the state folder.
+func TuneActive(d Deps) bool {
+	return d.Cfg.AutoTune && !d.exists(KillSwitch(filepath.Dir(d.HistoryPath)))
 }
 
 func (d Deps) applyChange(ctx context.Context, st *state.State, c tune.Change, now time.Time) error {

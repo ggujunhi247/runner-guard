@@ -169,8 +169,12 @@ func resumeWSL(ctx context.Context, d Deps, st *state.State) []string {
 	if key == "swap" {
 		k = &st.WSLSwapGB
 	}
+	alreadyTold := k.Frozen
 	k.Frozen = true
-	if err != nil { // stays pending: tried again next run
+	if err != nil { // stays pending: tried again next run; alert once, status keeps showing it
+		if alreadyTold {
+			return nil
+		}
 		return []string{fmt.Sprintf("a .wslconfig %s change was interrupted and the old file could not be put back yet (%v); will retry; check %s; wsl_%s tuning frozen", key, err, path, key)}
 	}
 	st.PendingWSLKey, st.PendingWSLPath, st.PendingWSLExisted = "", "", false
